@@ -4,6 +4,48 @@
 
 ---
 
+## 2026-06-26(五)補 —— 8 维度代码审计 + 5 项安全/正确性修复 + 双语 README
+
+用多 agent workflow(8 维度并行审计 → 每条发现 2 重对抗验证 → 综合)对 v0.1.0 全代码库做了一次穷尽审计:**57 条发现**通过验证,产出 [`AUDIT-ROADMAP.md`](../AUDIT-ROADMAP.md) 的 P0/P1/P2 优先级路线图。本轮按路线图修掉 P0 七条里的六条。
+
+### 安全修复(security)
+
+- **P0-1 NAR 路径穿越 → 任意文件写**(critical):`fetch_and_unpack` 用下载来的 `StorePath`(不可信)直接 `store_dir.join(..)` 落盘。恶意/被劫持镜像给 `StorePath: /etc/cron.d/evil`(无 `/nix/store/` 前缀)→ Unix 下 `Path::join` 丢弃 base 写绝对路径;`/nix/store/../../x` → `..` 上跳。把任意不可信镜像变成任意写。
+  修复:新增 `NarInfo::validated_ref_name()`,强制 `/nix/store/` 前缀 + 拒绝 `/`/`\`/NUL/`.`/`..`/空/非 `<32 hash>-<name>` 形状。`crates/nix-source/src/{cache.rs:72,narinfo.rs}`。
+- **P0-3 `resolve_package` shell 注入 → 潜在 RCE**(high):旧实现 `sh -c "curl '{url}' | xz -d | grep -F -- '-{name}'"`,单引号即逃逸。AI dispatch 层已在产出包名字符串,接入即 RCE。
+  修复:弃 `sh -c`,argv 形式 spawn curl/xz + 管道,匹配在 Rust 里做;`name` 仅作数据。`crates/nix-source/src/cache.rs`。
+
+### 正确性 / ADR 修复
+
+- **P0-5 / P0-6 `list`/`remove` 认 active 世代**(high,回滚可信):二者旧实现取 `locks/` 里 mtime 最新的 lock 判断"当前装了什么"。回滚后 active 是旧世代、最新 lock 是后装的 → `list` 谎报包集,`remove` 从错误基线重建(可能复活已回滚掉的包)。
+  修复:install/remove 写 `gen-<id>/source-lock.txt` 记录世代由哪个 lock 构建;新增 `active_lock_name()` 解析 **active 世代 → 它的 lock**,旧世代无指针时回退 mtime-latest。`crates/cli/src/{lib.rs,main.rs}`。
+  e2e:装 busybox(gen-1)→ 装 ripgrep(gen-2)→ `list` 显 ripgrep → `rollback 1` → `list` 正确显 busybox(修复前仍显 ripgrep)。
+- **P0-4 AI install 走 verify 门禁**(high,ADR-0005):`aevum ai "装..."` 旧路径 `do_install→install→set_active` 完全跳过门禁。违反 ADR-0005(AI 参与选包则世代须由 verify machine 独立复核,AI 不能自我放行)。
+  修复:新增 `install_gated()`(propose → `activate_verified` 门禁);`do_install` 加 `gated` 标志,AI 路径传 true、裸 `install` 命令传 false。硬失败(完整性/闭合)永不可绕过,版本回退需 confirm(`--yes` 兼作)。`crates/cli/src/{lib.rs,main.rs}`。
+  e2e:`aevum ai --yes "装个 busybox"` → `🛡 verify 门禁通过` + 写 `gen-001/verified`(passed=true,三判据全 0)。
+
+### 文档修复
+
+- **P0-7 `gc --keep` 文档数据丢失 bug**(导致误删):`--keep` 是要保留的世代 **id 列表**,不是"保留最近 N 个"。`aevum gc --keep 3` 只留 gen#3 删其余。两个 README 已改 `--keep 1,2,3`。
+- **`export-system --generation` 文档 bug**:实为位置参数(`crates/cli/src/main.rs:177`),旧写法 parse 失败。改 `aevum export-system 1 --out ...`。
+
+### 文档:英文 README 设为默认
+
+- `README.md` 改英文(国际/开源受众默认),新增 `README.zh-CN.md` 中文版,顶部互相切换。
+- 两版命令表均对着真实 clap `Command` enum 核过;补 WSL 编译说明、`aevum --help` 指向进阶命令。
+
+### 回归测试
+
+- `narinfo.rs` +3(合法接受、7 穿越向量 + 2 坏形状拒绝);`active_lock_pointer.rs` +3(回滚跟随 / 无 active 返回 None / 旧世代回退)。
+- nix-source 11 测、cli verify_gate 3 + active_lock 7,全 workspace lib 套件全绿。
+
+### 未决
+
+- **P0-2 NAR 完整性/签名校验**:`FileHash`/`NarHash`/`Sig` 解析了却从不用,下载无哈希对比、无 ed25519 签名验证。需引入 `sha2`+`ed25519-dalek`+自写 nix-base32,与"零重依赖、curl 当 HTTP"取向有张力,待决策后单独做。
+- P1 大项:加 CI(目前 unix 测试在 CI 缺位下从未自动跑)、`.cargo/config.toml` 致 clean clone 编译失败、`aevum update` 吞 curl 失败、无并发锁等,见 `AUDIT-ROADMAP.md`。
+
+---
+
 ## 2026-06-26(五)—— 统一 `aevum ai` 入口 + AI 修依赖冲突端到端验证
 
 把分散的 AI 能力(意图翻译 / explain / 冲突 repair)收敛成**一个命令** `aevum ai "<话>"`,
