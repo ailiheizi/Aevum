@@ -3,6 +3,8 @@
 > 来源:8 维度并行审计(code-quality / test-gaps / usability-gaps / docs-consistency / release-readiness / security / robustness / architecture-adr),共 **57 条**发现,已跨维度去重合并。
 > 三档按 影响/工作量 排序。effort 取值:trivial / small / medium / large。
 
+> **进度(2026-06-26)**:P0 七条已处理 —— P0-1 ✅(609a32d)、P0-2 ✅完整性/⏳签名(b2af2f7)、P0-3 ✅(609a32d)、P0-4 ✅(aa4e62a)、P0-5/6 ✅(2f7b8b2)、P0-7 ✅(a49cfd1)。剩 P0-2 签名半边(需 vendor ed25519)+ 全部 P1/P2。
+
 ---
 
 ## P0(发布前必修)
@@ -14,7 +16,7 @@
 - **修复**:用前校验 StorePath 必须以 `/nix/store/` 开头,剩余 `<hash>-<name>` 段拒绝 `/`、`..`、`.`、空段;unpack 前断言 canonical dest 仍在 store_dir 内;narinfo 的 hash 必须等于请求 hash。
 - **位置**:`crates/nix-source/src/cache.rs:72-73`(配合 `narinfo.rs:48`)
 
-### P0-2 Nix 二进制缓存零完整性/签名校验【critical / medium】(security#2 + robustness#2 合并)
+### P0-2 Nix 二进制缓存零完整性/签名校验【critical / medium】(security#2 + robustness#2 合并)— ✅ 完整性已修(b2af2f7)/ ⏳ 签名待 vendor
 - **为什么重要**:`FileHash`/`NarHash`/`Sig` 都被解析进结构体却从不使用;`curl -sL | xz -d` 直接喂给 `nar::unpack`,无哈希对比、无签名校验、`-L` 跟随重定向且无证书固定。与已校验 SHA256 的 Debian 路径(`lib.rs:796-804`)严重不对称,直接架空 ADR-0001 "可复现来自 lock"。
 - **修复**:下载后对压缩流比对 FileHash、对解压 NAR 比对 NarHash(不匹配即中止+删除);用配置的可信公钥(ed25519,同 Nix `trusted-public-keys`)验 `Sig`;未签名/不可验证的 narinfo 默认致命,除非显式 insecure 开关。
 - **位置**:`crates/nix-source/src/cache.rs:70-118`;`narinfo.rs:51,53,61`

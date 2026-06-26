@@ -4,6 +4,28 @@
 
 ---
 
+## 2026-06-26(五)補2 —— P0-2 NAR 完整性校验(零新依赖,真包 e2e 验证)
+
+闭合上一轮"未决"里 P0-2 的**完整性**半边:NAR 下载现在校验内容哈希。修复前 `curl|xz|unpack` 无条件信任镜像字节,`NarHash`/`FileHash` 解析了却从不用——传输损坏 / 中间人 / 镜像投毒全检测不到。
+
+### 实现(零新依赖,offline-safe)
+
+- 新增 `crates/nix-source/src/nix_base32.rs`:Nix **自定义** base32 编解码(字母表 `0123456789abcdfghijklmnpqrsvwxyz`,去 e/o/u/t;位反序,同 Nix `printHash32`)。纯函数,round-trip 测试自证位序正确。
+- `NarInfo::verify_nar_hash()`:解析 `NarHash: sha256:<nixbase32>`,与计算摘要比对。仅 sha256;缺失/其它算法**硬报错**,绝不静默放行。
+- `fetch_and_unpack`:`HashingReader` tee NAR 流,边解包边算 SHA256,drain 到 EOF(NarHash 覆盖整个流,unpack 可能不读完),再校验。不符 → 删解包结果 + 报错。不缓存整个 NAR。
+- 依赖只用 `sha2`+`hex`(store 早在用,已 vendored)——**无需重新 vendor**。
+
+### 验证
+
+- 真实 e2e(USTC Nix 镜像):`nix-fetch --resolve ripgrep` 拉 ripgrep-15.1.0 + 7 依赖共 8 个 NAR,完整性校验全过真包、不死锁、不误报。
+- +8 单测:nixbase32(round-trip / 已知长度 / 字母表)、verify_nar_hash(接受 / 篡改拒绝 / 缺失 / 坏算法)。nix-source 19 测全过。
+
+### 边界(诚实声明)
+
+完整性校验**击穿传输损坏与未察觉的内容篡改**,但挡不住"完全恶意、会同时伪造 NarHash 的镜像"——那需要 **ed25519 签名校验**(验 narinfo `Sig` 对 trusted-public-keys)。签名半边需引入 `ed25519-dalek` 并重新 vendor(离线构建约束),留作独立任务。
+
+---
+
 ## 2026-06-26(五)補 —— 8 维度代码审计 + 5 项安全/正确性修复 + 双语 README
 
 用多 agent workflow(8 维度并行审计 → 每条发现 2 重对抗验证 → 综合)对 v0.1.0 全代码库做了一次穷尽审计:**57 条发现**通过验证,产出 [`AUDIT-ROADMAP.md`](../AUDIT-ROADMAP.md) 的 P0/P1/P2 优先级路线图。本轮按路线图修掉 P0 七条里的六条。
@@ -41,7 +63,7 @@
 
 ### 未决
 
-- **P0-2 NAR 完整性/签名校验**:`FileHash`/`NarHash`/`Sig` 解析了却从不用,下载无哈希对比、无 ed25519 签名验证。需引入 `sha2`+`ed25519-dalek`+自写 nix-base32,与"零重依赖、curl 当 HTTP"取向有张力,待决策后单独做。
+- **P0-2 NAR 完整性/签名校验**:~~完整性已在補2 完成(NarHash 校验,零新依赖)~~;**签名**半边(ed25519 验 `Sig`)仍待——需引入 `ed25519-dalek` 并重新 vendor(离线构建约束),单独做。
 - P1 大项:加 CI(目前 unix 测试在 CI 缺位下从未自动跑)、`.cargo/config.toml` 致 clean clone 编译失败、`aevum update` 吞 curl 失败、无并发锁等,见 `AUDIT-ROADMAP.md`。
 
 ---
