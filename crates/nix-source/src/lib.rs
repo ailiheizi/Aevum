@@ -12,6 +12,7 @@
 pub mod nar;
 pub mod narinfo;
 pub mod cache;
+pub mod nix_base32;
 
 pub use cache::NixCacheClient;
 pub use narinfo::NarInfo;

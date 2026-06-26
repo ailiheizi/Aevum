@@ -4,12 +4,41 @@
 //! 递归拉依赖:BFS,visited 去重。
 
 use std::collections::{BTreeSet, VecDeque};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::nar;
 use crate::narinfo::NarInfo;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
+
+/// 读时顺带喂 SHA256 的 tee reader:让 `nar::unpack` 解包的同时算出 NAR 内容哈希,
+/// 无需把整个(可能上百 MB 的)NAR 缓存进内存。
+struct HashingReader<R: Read> {
+    inner: R,
+    hasher: Sha256,
+}
+
+impl<R: Read> HashingReader<R> {
+    fn new(inner: R) -> Self {
+        Self { inner, hasher: Sha256::new() }
+    }
+    /// 取出最终摘要(调用方须确保已把流读到 EOF,见 fetch_and_unpack 的 drain)。
+    fn finalize(self) -> [u8; 32] {
+        self.hasher.finalize().into()
+    }
+}
+
+impl<R: Read> Read for HashingReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        if n > 0 {
+            self.hasher.update(&buf[..n]);
+        }
+        Ok(n)
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum CacheError {
@@ -101,8 +130,24 @@ impl NixCacheClient {
                 reason: format!("xz spawn: {e}"),
             })?;
 
-        let mut nar_stream = xz.stdout.take().unwrap();
-        let count = nar::unpack(&mut nar_stream, &dest)?;
+        let nar_stdout = xz.stdout.take().unwrap();
+        // tee:解包的同时算 NAR 内容哈希(完整性校验,P0-2)。
+        let mut hashing = HashingReader::new(nar_stdout);
+        let count = nar::unpack(&mut hashing, &dest)?;
+        // NAR 内容哈希覆盖**整个**字节流,但 unpack 可能未读到 EOF(末尾 padding 等),
+        // 必须把剩余字节也喂进 hasher,否则摘要不完整。
+        let mut drain = [0u8; 8192];
+        loop {
+            match hashing.read(&mut drain) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(&dest);
+                    return Err(CacheError::NarFetch { url: nar_url, reason: format!("读 NAR 流失败: {e}") });
+                }
+            }
+        }
+        let nar_digest = hashing.finalize();
 
         // 等子进程结束
         let _ = curl.wait();
@@ -113,6 +158,16 @@ impl NixCacheClient {
             return Err(CacheError::NarFetch {
                 url: nar_url,
                 reason: format!("xz 解压失败(status {})", xz_status),
+            });
+        }
+
+        // 完整性闸门:NAR 内容哈希须匹配 narinfo 的 NarHash。不符 → 删解包结果 + 报错。
+        // 这是"可复现只来自校验过的字节"的底线(ADR-0001):传输损坏/中间人/投毒都在此被拒。
+        if let Err(e) = info.verify_nar_hash(&nar_digest) {
+            let _ = std::fs::remove_dir_all(&dest);
+            return Err(CacheError::NarFetch {
+                url: nar_url,
+                reason: format!("{e}"),
             });
         }
 

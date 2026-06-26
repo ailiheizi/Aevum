@@ -121,6 +121,37 @@ impl NarInfo {
         }
         Ok(rest)
     }
+
+    /// 校验解压后 NAR 的内容哈希是否匹配 narinfo 的 `NarHash`。
+    ///
+    /// `nar_sha256` 是调用方对**完整 NAR 字节流**算出的 SHA256 摘要(32 字节)。
+    /// narinfo 的 `NarHash` 形如 `sha256:<nixbase32>`(Nix 自定义 base32,52 字符)。
+    /// 把摘要编成 nixbase32 与之逐字符比对。
+    ///
+    /// **安全意义**:这是 NAR 下载的完整性闸门——传输损坏 / 中间人篡改 / 镜像投毒
+    /// 都会导致摘要不符而被拒。没有它,`curl | xz | unpack` 等于无条件信任镜像字节。
+    /// 仅支持 sha256(Nix 现行缓存唯一在用);其它算法返回错误而非静默放行。
+    pub fn verify_nar_hash(&self, nar_sha256: &[u8]) -> Result<(), NarInfoError> {
+        if self.nar_hash.is_empty() {
+            return Err(NarInfoError::MissingField("NarHash".into()));
+        }
+        let (algo, want) = self
+            .nar_hash
+            .split_once(':')
+            .ok_or_else(|| NarInfoError::Format(format!("NarHash 缺算法前缀: {}", self.nar_hash)))?;
+        if algo != "sha256" {
+            return Err(NarInfoError::Format(format!(
+                "NarHash 算法不支持(仅 sha256): {algo}"
+            )));
+        }
+        let got = crate::nix_base32::encode(nar_sha256);
+        if got != want {
+            return Err(NarInfoError::Format(format!(
+                "NAR 内容哈希不匹配(完整性校验失败):期望 sha256:{want},实得 sha256:{got}"
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -161,6 +192,47 @@ Sig: cache.nixos.org-1:A280XsxdSgHu2NO8KKju5Wvf7a1JgtH0Yp5c6Btqc4Rnvd/lA1Dpi6MEw
     fn missing_store_path_errors() {
         let bad = "URL: nar/foo.nar.xz\n";
         assert!(matches!(NarInfo::parse(bad), Err(NarInfoError::MissingField(_))));
+    }
+
+    #[test]
+    fn verify_nar_hash_accepts_matching() {
+        use sha2::{Digest, Sha256};
+        // 任取一段字节算 sha256 → 编成 nixbase32 → 塞进 NarHash → verify 应通过。
+        let payload = b"the-nar-bytes-whatever";
+        let digest: [u8; 32] = Sha256::digest(payload).into();
+        let nixb32 = crate::nix_base32::encode(&digest);
+        let info = NarInfo {
+            store_path: "/nix/store/f4y36sn7m173qvdija8a1p6v81py66ns-x-1".into(),
+            url: "nar/x.nar.xz".into(),
+            nar_hash: format!("sha256:{nixb32}"),
+            ..Default::default()
+        };
+        assert!(info.verify_nar_hash(&digest).is_ok());
+    }
+
+    #[test]
+    fn verify_nar_hash_rejects_tamper() {
+        use sha2::{Digest, Sha256};
+        let good: [u8; 32] = Sha256::digest(b"real").into();
+        let info = NarInfo {
+            nar_hash: format!("sha256:{}", crate::nix_base32::encode(&good)),
+            ..Default::default()
+        };
+        // 篡改后的字节摘要不同 → 必须拒绝。
+        let tampered: [u8; 32] = Sha256::digest(b"evil").into();
+        assert!(info.verify_nar_hash(&tampered).is_err());
+    }
+
+    #[test]
+    fn verify_nar_hash_rejects_missing_and_bad_algo() {
+        let no_hash = NarInfo::default();
+        assert!(no_hash.verify_nar_hash(&[0u8; 32]).is_err());
+
+        let md5 = NarInfo { nar_hash: "md5:deadbeef".into(), ..Default::default() };
+        assert!(md5.verify_nar_hash(&[0u8; 32]).is_err());
+
+        let no_prefix = NarInfo { nar_hash: "justhexnocolon".into(), ..Default::default() };
+        assert!(no_prefix.verify_nar_hash(&[0u8; 32]).is_err());
     }
 
     #[test]
