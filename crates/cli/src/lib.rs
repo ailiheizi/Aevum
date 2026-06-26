@@ -336,6 +336,70 @@ pub fn open_generations(
     Ok(GenerationManager::open(layout.generations_dir())?)
 }
 
+/// 记录某世代由哪个 lock 构建:写 `generations/gen-<id>/source-lock.txt`(内容为 lock 名)。
+///
+/// 让 `list`/`remove` 能问"**当前 active 世代**用的是哪个 lock",而不是瞎猜"最近改的 lock"。
+/// 后者在 rollback/switch 后会撒谎(active 是旧世代,但最新 lock 是新装的那个)。
+/// 与 GC 用的 `lock.txt`(存 object_id)分开命名,互不干扰。纯文本、跨平台。
+pub fn record_generation_lock(
+    layout: &Layout,
+    gen_id: u64,
+    lock_name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let gens = open_generations(layout)?;
+    let gen_dir = gens.generation_dir(gen_id);
+    std::fs::create_dir_all(&gen_dir)?;
+    std::fs::write(gen_dir.join("source-lock.txt"), lock_name)?;
+    Ok(())
+}
+
+/// 解析**当前 active 世代**对应的 lock 名。
+///
+/// 1. 读 active 世代 id;无 active 世代 → `Ok(None)`。
+/// 2. 读 `gen-<id>/source-lock.txt`(本轮起 install 会写)。
+/// 3. 兼容旧世代(无该文件):回退到 `locks/` 里最近修改的 lock 名(老行为),
+///    但只在拿不到 active 指针时才彻底无解。
+pub fn active_lock_name(
+    layout: &Layout,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    let gens = open_generations(layout)?;
+    let Some(active_id) = gens.active_generation()? else {
+        return Ok(None);
+    };
+    let ptr = gens.generation_dir(active_id).join("source-lock.txt");
+    if let Ok(name) = std::fs::read_to_string(&ptr) {
+        let name = name.trim();
+        if !name.is_empty() {
+            return Ok(Some(name.to_string()));
+        }
+    }
+    // 旧世代无指针:回退到 mtime 最新的 lock(尽力而为,带告警由调用方决定)。
+    Ok(latest_lock_name(layout))
+}
+
+/// 回退用:`locks/` 里最近修改的 lock 名(不含 `.lock` 后缀)。无则 None。
+pub fn latest_lock_name(layout: &Layout) -> Option<String> {
+    let lock_dir = layout.locks_dir();
+    if !lock_dir.is_dir() {
+        return None;
+    }
+    let mut locks: Vec<_> = std::fs::read_dir(&lock_dir)
+        .ok()?
+        .flatten()
+        .filter(|e| e.path().extension().map(|x| x == "lock").unwrap_or(false))
+        .collect();
+    locks.sort_by_key(|e| {
+        std::cmp::Reverse(
+            e.metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+        )
+    });
+    locks
+        .first()
+        .and_then(|e| e.path().file_stem().map(|s| s.to_string_lossy().into_owned()))
+}
+
 /// 从 store 对象重建包内运行视图(块3:证明 store 是可运行的真相源)。
 ///
 /// 按每个 [`IngestedEntry`] 的 `rel_path` 在 `dest` 重建包内布局,

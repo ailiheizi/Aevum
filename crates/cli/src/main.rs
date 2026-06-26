@@ -692,46 +692,36 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Command::List => {
-            // 列出当前活跃世代的顶层包(从 lock 文件读)
-            let active_link = layout.generations_dir().join("active");
-            if !active_link.symlink_metadata().is_ok() {
+            // 列出**当前 active 世代**的顶层包(认 active 指针,不瞎猜最新 lock)。
+            let gens = aevum_cli::open_generations(&layout).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let Some(active_id) = gens.active_generation().map_err(|e| anyhow::anyhow!("{e}"))? else {
                 return Err(anyhow::anyhow!("无活跃世代(先 aevum install 或 switch)"));
-            }
-            // 找 active 的 lock 名——从 locks/ 里找最近修改的,或从世代的 lock.txt 读
-            let lock_dir = layout.locks_dir();
-            if lock_dir.is_dir() {
-                let mut locks: Vec<_> = std::fs::read_dir(&lock_dir)?
-                    .flatten()
-                    .filter(|e| e.path().extension().map(|x| x == "lock").unwrap_or(false))
-                    .collect();
-                locks.sort_by_key(|e| std::cmp::Reverse(e.metadata().and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH)));
-                if let Some(latest) = locks.first() {
-                    let lock = aevum_cli::parse_lock_file(&latest.path())
-                        .map_err(|e| anyhow::anyhow!("{e}"))?;
-                    println!("当前世代 ({}, {} 个包):", lock.closure_id, lock.package_count);
+            };
+            match aevum_cli::active_lock_name(&layout).map_err(|e| anyhow::anyhow!("{e}"))? {
+                Some(lock_name) => {
+                    let lock_path = layout.locks_dir().join(format!("{lock_name}.lock"));
+                    let lock = aevum_cli::parse_lock_file(&lock_path)
+                        .map_err(|e| anyhow::anyhow!("读 gen-{active_id} 的 lock '{lock_name}' 失败: {e}"))?;
+                    println!("当前世代 gen-{active_id} ({}, {} 个包):", lock.closure_id, lock.package_count);
                     for p in &lock.locked {
                         println!("  {} @ {}", p.name, p.version);
                     }
-                } else {
-                    println!("无 lock 文件");
                 }
+                None => println!("gen-{active_id}: 无对应 lock 文件"),
             }
         }
         Command::Remove { packages, mirror } => {
             if packages.is_empty() {
                 return Err(anyhow::anyhow!("需指定要移除的包名"));
             }
-            // 策略:读当前最新 lock → 去掉指定包 → 用剩余包重新 install
-            let lock_dir = layout.locks_dir();
-            let mut locks: Vec<_> = std::fs::read_dir(&lock_dir)?
-                .flatten()
-                .filter(|e| e.path().extension().map(|x| x == "lock").unwrap_or(false))
-                .collect();
-            locks.sort_by_key(|e| std::cmp::Reverse(e.metadata().and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH)));
-            let latest = locks.first()
-                .ok_or_else(|| anyhow::anyhow!("无 lock 文件,无法确定当前包集"))?;
-            let lock = aevum_cli::parse_lock_file(&latest.path())
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            // 取**当前 active 世代**的 lock(认 active 指针,不瞎猜最新 lock):
+            // rollback 后 active 是旧世代,最新 lock 可能是别的——remove 必须基于真实在用的包集。
+            let lock_name = aevum_cli::active_lock_name(&layout)
+                .map_err(|e| anyhow::anyhow!("{e}"))?
+                .ok_or_else(|| anyhow::anyhow!("无活跃世代(先 aevum install),无法确定当前包集"))?;
+            let lock_path = layout.locks_dir().join(format!("{lock_name}.lock"));
+            let lock = aevum_cli::parse_lock_file(&lock_path)
+                .map_err(|e| anyhow::anyhow!("读 active 世代的 lock '{lock_name}' 失败: {e}"))?;
 
             // 从 lock 中取顶层包名(去掉被 remove 的)
             let remaining: Vec<String> = lock.locked.iter()
@@ -756,6 +746,9 @@ fn main() -> anyhow::Result<()> {
 
             let report = aevum_cli::install(&layout, &lock_new, &mirror, &[], gen_id)
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if let Err(e) = aevum_cli::record_generation_lock(&layout, gen_id, "removed") {
+                println!("  ⚠ 记录世代 lock 指针失败: {e}");
+            }
             println!("  gen-{} 已激活({} store 对象)", report.generation, report.store_objects);
             match aevum_cli::refresh_profile(&layout) {
                 Ok(n) => println!("  profile/bin: {n} 个可执行文件"),
@@ -1379,6 +1372,10 @@ fn do_install(
     println!("  镜像: {mirror}");
     let report = aevum_cli::install(layout, &lock, mirror, only, gen_id)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
+    // 记录该世代由哪个 lock 构建(供 list/remove 认 active 世代,而非瞎猜最新 lock)。
+    if let Err(e) = aevum_cli::record_generation_lock(layout, gen_id, &packages[0]) {
+        println!("  ⚠ 记录世代 lock 指针失败: {e}");
+    }
     println!("[install] gen-{} 已激活({} 个 store 对象)", report.generation, report.store_objects);
     match aevum_cli::refresh_profile(layout) {
         Ok(n) => println!("  profile/bin: {n} 个可执行文件已就绪"),
