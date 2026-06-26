@@ -330,6 +330,107 @@ mod tests {
         assert_eq!(h2.messages[0].content, "msg20"); // 保留最近 10 条
         let _ = std::fs::remove_file(&path);
     }
+
+    // ── ai_dispatch 意图解析(用真实 DeepSeek 响应文本固化,离线、不触网)──
+
+    #[test]
+    fn parse_dispatch_install_intent() {
+        // 真实 DeepSeek 对"我要 python 数据科学环境"的响应格式
+        let resp = "INTENT: install\n\
+            PACKAGES: python3 python3-pip python3-numpy python3-pandas jupyter-notebook\n\
+            QUERY:\n\
+            REPLY: 好的，我将为你安装 Python 3 以及数据科学常用库。";
+        let a = parse_dispatch_response(resp);
+        assert_eq!(a.intent, "install");
+        assert!(a.packages.contains(&"python3-numpy".to_string()));
+        assert!(a.packages.contains(&"jupyter-notebook".to_string()));
+        assert!(a.query.is_empty());
+        assert!(a.reply.contains("Python"));
+    }
+
+    #[test]
+    fn parse_dispatch_explain_intent() {
+        let resp = "INTENT: explain\n\
+            PACKAGES:\n\
+            QUERY:\n\
+            REPLY: 这个错误通常是因为系统找不到动态库文件。";
+        let a = parse_dispatch_response(resp);
+        assert_eq!(a.intent, "explain");
+        assert!(a.packages.is_empty(), "explain 不应有包名");
+        assert!(a.reply.contains("动态库"));
+    }
+
+    #[test]
+    fn parse_dispatch_list_intent() {
+        let resp = "INTENT: list\nPACKAGES:\nQUERY:\nREPLY: 我来帮你查看已安装的软件包列表。";
+        let a = parse_dispatch_response(resp);
+        assert_eq!(a.intent, "list");
+        assert!(a.packages.is_empty());
+    }
+
+    #[test]
+    fn parse_dispatch_search_intent() {
+        let resp = "INTENT: search\nPACKAGES:\nQUERY: 文本编辑器\nREPLY: 我帮你搜索文本编辑器相关的包。";
+        let a = parse_dispatch_response(resp);
+        assert_eq!(a.intent, "search");
+        assert_eq!(a.query, "文本编辑器");
+    }
+
+    #[test]
+    fn parse_dispatch_malformed_degrades_to_chat() {
+        // AI 没按格式回复 → 整段当 reply,意图降级 chat(绝不误触发安装/卸载)
+        let resp = "你好！我是 Aevum 助手，有什么可以帮你的吗？";
+        let a = parse_dispatch_response(resp);
+        assert_eq!(a.intent, "chat", "无格式响应必须降级 chat,不可误判副作用意图");
+        assert!(a.packages.is_empty());
+        assert_eq!(a.reply, resp);
+    }
+
+    // ── ai_evaluate_repair 决策解析(用真实 DeepSeek 4 场景响应固化)──
+
+    #[test]
+    fn parse_repair_plan_a() {
+        // 场景3:libhttp 可放宽到 2.0(方案A 可解)
+        let resp = "PLAN: A\n\
+            ACTION: 放宽 libhttp 约束到 >=2.0\n\
+            REASON: 仅调整约束即可解决冲突，无需更换包版本，风险最低。";
+        let d = parse_repair_response(resp);
+        assert_eq!(d.chosen_plan, "A");
+        assert!(d.action.contains("libhttp"));
+        assert!(d.reasoning.contains("风险最低"));
+    }
+
+    #[test]
+    fn parse_repair_plan_c() {
+        // 场景2:libfoo =1.0 vs =2.0,无交集 → 保留两份
+        let resp = "PLAN: C\n\
+            ACTION: 保留 libfoo 1.0 和 2.0 两份版本\n\
+            REASON: libfoo 无法通过放宽约束共存，保留两份是安全可行的方案。";
+        let d = parse_repair_response(resp);
+        assert_eq!(d.chosen_plan, "C");
+        assert!(d.action.contains("两份"));
+    }
+
+    #[test]
+    fn parse_repair_plan_d() {
+        // 场景4:三方精确版本互斥 → 告知用户决策
+        let resp = "PLAN: D\n\
+            ACTION: 告知用户 libcore 无共存版本，需手动取舍\n\
+            REASON: 三个版本互不兼容且都是精确版本约束，只能由用户决策。";
+        let d = parse_repair_response(resp);
+        assert_eq!(d.chosen_plan, "D");
+        assert!(d.reasoning.contains("用户决策"));
+    }
+
+    #[test]
+    fn parse_repair_malformed_falls_back() {
+        // AI 没按格式 → 整段当 reasoning,plan 默认 A,action 占位
+        let resp = "我觉得你应该放宽约束试试看。";
+        let d = parse_repair_response(resp);
+        assert_eq!(d.chosen_plan, "A");
+        assert_eq!(d.action, "见 AI 分析");
+        assert_eq!(d.reasoning, resp);
+    }
 }
 
 // ─────────────────────── AI 修复依赖冲突 ───────────────────────
@@ -373,8 +474,14 @@ REASON: 一句话理由"#;
     );
 
     let response = ai_chat(config, system_prompt, &user_msg)?;
+    Ok(parse_repair_response(&response))
+}
 
-    // 解析 AI 响应
+/// 把 AI 的修复决策文本解析成 [`AiRepairDecision`](纯函数,离线可测,不碰网络)。
+///
+/// 期望格式:`PLAN: A|B|C|D` / `ACTION:` / `REASON:`。
+/// AI 没按格式(action 为空)→ 整个响应当 reasoning,plan 默认 A。
+pub fn parse_repair_response(response: &str) -> AiRepairDecision {
     let mut plan = String::from("A");
     let mut action = String::new();
     let mut reasoning = String::new();
@@ -392,15 +499,15 @@ REASON: 一句话理由"#;
 
     if action.is_empty() {
         // AI 没按格式回复,把整个响应当 reasoning
-        reasoning = response;
+        reasoning = response.to_string();
         action = "见 AI 分析".into();
     }
 
-    Ok(AiRepairDecision {
+    AiRepairDecision {
         chosen_plan: plan,
         reasoning,
         action,
-    })
+    }
 }
 
 /// 格式化冲突诊断为人/AI 可读的文本。
@@ -540,8 +647,14 @@ REPLY: <给用户的中文回复,一两句话说明你要做什么或解答>
     messages.push(ChatMessage { role: "user".into(), content: user_input.to_string() });
 
     let response = ai_chat_history(config, system_prompt, &messages)?;
+    Ok(parse_dispatch_response(&response))
+}
 
-    // 解析结构化输出
+/// 把 AI 的结构化文本响应解析成 [`AiAction`](纯函数,离线可测,不碰网络)。
+///
+/// 期望格式(每字段一行):`INTENT:` / `PACKAGES:` / `QUERY:` / `REPLY:`。
+/// AI 没按格式 → 整个响应当 reply,意图降级为 chat(不会误触发副作用动作)。
+pub fn parse_dispatch_response(response: &str) -> AiAction {
     let mut action = AiAction {
         intent: "chat".into(),
         packages: Vec::new(),
@@ -562,9 +675,9 @@ REPLY: <给用户的中文回复,一两句话说明你要做什么或解答>
     }
     // AI 没按格式 → 整个响应当 reply,意图 chat
     if action.reply.is_empty() {
-        action.reply = response;
+        action.reply = response.to_string();
     }
-    Ok(action)
+    action
 }
 
 /// 多轮对话:把历史 messages 全部塞进 API 请求(OpenAI 兼容 / Claude 都支持)。
