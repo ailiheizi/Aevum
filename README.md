@@ -92,7 +92,7 @@ Aevum is a Linux userspace package manager written in Rust. Its core ideas:
 | `aevum nix-fetch --resolve <name>` | Fetch a package + deps from a Nix cache |
 | `aevum nix-fetch <hash> --activate` | Fetch a package and link it into profile/bin |
 | `aevum audit-config <ts> --against <lock>` | Detect configuration drift (CI-friendly) |
-| `aevum export-system --generation <N>` | Export a runnable rootfs (chroot/nspawn/QEMU) |
+| `aevum export-system <gen>` | Export a runnable rootfs (chroot/nspawn/QEMU) |
 | `aevum gc --keep <N>` | Garbage-collect (keep the most recent N generations) |
 | `aevum explain <message>` | AI explains an error / gives advice |
 
@@ -242,7 +242,7 @@ aevum gc --keep 3
 
 ```bash
 # export a rootfs (chroot/nspawn/QEMU-ready)
-aevum export-system --generation 1 --out /tmp/my-rootfs
+aevum export-system 1 --out /tmp/my-rootfs
 
 # enter it
 sudo systemd-nspawn -D /tmp/my-rootfs

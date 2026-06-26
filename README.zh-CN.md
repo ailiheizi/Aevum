@@ -92,7 +92,7 @@ Aevum 是一个用 Rust 实现的 Linux 用户态包管理器,核心理念:
 | `aevum nix-fetch --resolve <name>` | 从 Nix cache 拉包+依赖 |
 | `aevum nix-fetch <hash> --activate` | 拉包并链到 profile/bin |
 | `aevum audit-config <ts> --against <lock>` | 检测配置是否漂移 |
-| `aevum export-system --generation <N>` | 导出可运行 rootfs(chroot/nspawn) |
+| `aevum export-system <gen>` | 导出可运行 rootfs(chroot/nspawn) |
 | `aevum gc --keep <N>` | 垃圾回收(保留最近 N 个世代) |
 | `aevum explain <message>` | AI 解释错误/给建议 |
 
@@ -242,7 +242,7 @@ aevum gc --keep 3
 
 ```bash
 # 导出 rootfs(可直接 chroot/nspawn/QEMU)
-aevum export-system --generation 1 --out /tmp/my-rootfs
+aevum export-system 1 --out /tmp/my-rootfs
 
 # 进入
 sudo systemd-nspawn -D /tmp/my-rootfs
