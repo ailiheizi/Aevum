@@ -89,6 +89,17 @@ enum Command {
         #[arg(long, default_value = "trixie")]
         dist: String,
     },
+    /// AI 统一入口:自然语言对话,自动判断意图(装包/解释/搜索/清理...),支持多轮历史。
+    Ai {
+        /// 你想说的话(自然语言)。省略 + --reset 时只清历史。
+        message: Vec<String>,
+        /// 清空对话历史,开新话题。
+        #[arg(long)]
+        reset: bool,
+        /// 跳过有副作用动作(装包/卸载/清理)的确认。
+        #[arg(long)]
+        yes: bool,
+    },
     /// AI 解释错误或给出建议(用配置的 AI 模型分析问题并给出人话解释)。
     Explain {
         /// 要解释的内容(错误信息、包名、概念等)。
@@ -377,6 +388,7 @@ fn main() -> anyhow::Result<()> {
                     println!("  ⚠ 未解析(前10): {names:?}");
                 }
                 warn_conflicts(&lock);
+                ai_assist_conflicts(&layout, &lock);
             } else if let Some(intent_text) = intent {
                 // AI 增强路径,人在回路(ADR-0003 边界3):翻译 → 摊开约束 → 确认 → 求解。
                 let lock_name = name.unwrap_or_else(|| "intent".to_string());
@@ -442,6 +454,7 @@ fn main() -> anyhow::Result<()> {
                     println!("  ⚠ 未解析(前10): {names:?}");
                 }
                 warn_conflicts(&lock);
+                ai_assist_conflicts(&layout, &lock);
             } else {
                 // 显式包名路径(里程碑5,无 AI)。
                 if packages.is_empty() {
@@ -470,6 +483,7 @@ fn main() -> anyhow::Result<()> {
                     println!("  未解析(前10): {names:?}");
                 }
                 warn_conflicts(&lock);
+                ai_assist_conflicts(&layout, &lock);
             }
         }
         Command::AuditConfig { config, against, inputs } => {
@@ -560,6 +574,67 @@ fn main() -> anyhow::Result<()> {
             }
             let size = std::fs::metadata(layout.index_file())?.len();
             println!("  ✓ 索引已更新: {} ({:.1} MB)", layout.index_file().display(), size as f64 / 1_048_576.0);
+        }
+        Command::Ai { message, reset, yes } => {
+            use aevum_intent::ai_client::{AiConfig, ChatHistory};
+            let hist_path = layout.root.join("ai-history.txt");
+
+            if reset {
+                ChatHistory::reset(&hist_path);
+                println!("已清空对话历史。");
+                if message.is_empty() {
+                    return Ok(());
+                }
+            }
+            let user_input = message.join(" ");
+            if user_input.trim().is_empty() {
+                return Err(anyhow::anyhow!("请说点什么,如 `aevum ai \"我要个 python 环境\"`"));
+            }
+
+            let config_path = layout.root.join("config.toml");
+            let ai_cfg = AiConfig::load(&config_path);
+            if !ai_cfg.is_available() {
+                return Err(anyhow::anyhow!(
+                    "AI 不可用。配置:设 AEVUM_AI_KEY 环境变量,或编辑 {}/config.toml 的 [ai] 段(provider/api_key)。本地可用 ollama 无需 key。",
+                    layout.root.display()
+                ));
+            }
+
+            // 加载历史 + 判断意图
+            let mut history = ChatHistory::load(&hist_path);
+            let action = aevum_intent::ai_client::ai_dispatch(&ai_cfg, &history.messages, &user_input)
+                .map_err(|e| anyhow::anyhow!("AI 调用失败: {e}"))?;
+
+            // 回复用户
+            println!("\n💬 {}\n", action.reply);
+
+            // 记录这轮对话
+            history.push("user", &user_input);
+            history.push("assistant", &action.reply);
+            history.save(&hist_path, 20);
+
+            // 分发到动作
+            match action.intent.as_str() {
+                "install" if !action.packages.is_empty() => {
+                    println!("→ 意图: 安装 {:?}", action.packages);
+                    if !yes && !confirm("确认安装?") {
+                        println!("已取消。");
+                        return Ok(());
+                    }
+                    let gen_id = aevum_cli::next_generation_id(&layout);
+                    do_install(&layout, &action.packages, &[], aevum_cli::MIRROR_USTC, gen_id)?;
+                }
+                "remove" if !action.packages.is_empty() => {
+                    println!("→ 意图: 移除 {:?}(用 `aevum remove` 执行)", action.packages);
+                }
+                "search" if !action.query.is_empty() => {
+                    println!("→ 意图: 搜索 '{}'(用 `aevum search {}` 执行)", action.query, action.query);
+                }
+                "list" => println!("→ 意图: 列出已装包(用 `aevum list` 执行)"),
+                "gc" => println!("→ 意图: 清理旧世代(用 `aevum gc --keep N` 执行)"),
+                "explain" | "repair" | "chat" => { /* reply 已显示,无副作用 */ }
+                _ => { /* 已显示 reply */ }
+            }
         }
         Command::Explain { message } => {
             let config_path = layout.root.join("config.toml");
@@ -774,34 +849,7 @@ fn main() -> anyhow::Result<()> {
             } else {
                 generation
             };
-            // 1. resolve(显式包名,无 AI)→ lock。
-            let lock = aevum_cli::resolve(&layout, &packages, &packages[0])
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            println!(
-                "[install] 求解: closure_id={} ({} 包, 未解析 {})",
-                lock.closure_id, lock.package_count, lock.diagnostics.unresolved.len()
-            );
-            // 2. 摊开将真下载的包。
-            let targets: Vec<&str> = if only.is_empty() {
-                lock.locked.iter().map(|p| p.name.as_str()).collect()
-            } else {
-                only.iter().map(|s| s.as_str()).collect()
-            };
-            println!("将安装 {} 个包 → gen-{gen_id}", targets.len());
-            println!("  镜像: {mirror}");
-            // 3. install:下载→校验→解包→入库→世代→激活。
-            let report = aevum_cli::install(&layout, &lock, &mirror, &only, gen_id)
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            println!(
-                "[install] gen-{} 已激活({} 个 store 对象)",
-                report.generation, report.store_objects
-            );
-            // 4. 自动刷新 profile/bin(让 PATH 立即可用)。
-            match aevum_cli::refresh_profile(&layout) {
-                Ok(n) => println!("  profile/bin: {n} 个可执行文件已就绪"),
-                Err(e) => println!("  ⚠ profile 刷新: {e}"),
-            }
-            println!("\n  直接使用: {}", packages.join(" / "));
+            do_install(&layout, &packages, &only, &mirror, gen_id)?;
         }
         Command::ExportRootfs { package, bin, out } => {
             let bin_rel = bin.unwrap_or_else(|| format!("usr/bin/{package}"));
@@ -1307,6 +1355,44 @@ fn sync_boot_default(layout: &aevum_cli::Layout, generation: u64) {
     }
 }
 
+/// 安装包的共享核心:resolve → install → refresh_profile(供 Install 命令与 AI 分发共用)。
+#[cfg(unix)]
+fn do_install(
+    layout: &aevum_cli::Layout,
+    packages: &[String],
+    only: &[String],
+    mirror: &str,
+    gen_id: u64,
+) -> anyhow::Result<()> {
+    let lock = aevum_cli::resolve(layout, packages, &packages[0])
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    println!(
+        "[install] 求解: closure_id={} ({} 包, 未解析 {})",
+        lock.closure_id, lock.package_count, lock.diagnostics.unresolved.len()
+    );
+    let targets: Vec<&str> = if only.is_empty() {
+        lock.locked.iter().map(|p| p.name.as_str()).collect()
+    } else {
+        only.iter().map(|s| s.as_str()).collect()
+    };
+    println!("将安装 {} 个包 → gen-{gen_id}", targets.len());
+    println!("  镜像: {mirror}");
+    let report = aevum_cli::install(layout, &lock, mirror, only, gen_id)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    println!("[install] gen-{} 已激活({} 个 store 对象)", report.generation, report.store_objects);
+    match aevum_cli::refresh_profile(layout) {
+        Ok(n) => println!("  profile/bin: {n} 个可执行文件已就绪"),
+        Err(e) => println!("  ⚠ profile 刷新: {e}"),
+    }
+    println!("\n  直接使用: {}", packages.join(" / "));
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn do_install(_l: &aevum_cli::Layout, _p: &[String], _o: &[String], _m: &str, _g: u64) -> anyhow::Result<()> {
+    Err(anyhow::anyhow!("install 需要 unix"))
+}
+
 /// 打印版本冲突警告(ai/02 repair 触发依据)。无冲突则静默。
 /// 冲突不阻断 lock 产出(已选版本仍确定),但醒目提示用户:某包被互斥约束要求,
 /// 当前只满足了一方,另一方实际跑不起来——需 repair(放宽/升降级/保留两份)。
@@ -1354,6 +1440,52 @@ fn warn_conflicts(lock: &aevum_solver::Lock) {
             "      ✗ 方案D: {} 无法共存(约束 {:?} 来自 {:?})— 自动修复手段已穷尽,需你二选一取舍",
             u.package, u.constraints, u.sources
         );
+    }
+}
+
+/// AI 评估依赖冲突并给出修复建议(当 config.toml 配了 AI 且有冲突时)。
+/// 这是 AI-native 的核心:AI 分析多个修复方案,选最优并解释。
+fn ai_assist_conflicts(layout: &aevum_cli::Layout, lock: &aevum_solver::Lock) {
+    if lock.diagnostics.conflicts.is_empty() {
+        return;
+    }
+    let config_path = layout.root.join("config.toml");
+    let ai_cfg = aevum_intent::ai_client::AiConfig::load(&config_path);
+    if !ai_cfg.is_available() {
+        return; // 无 AI,跳过(已有确定性建议打印)
+    }
+
+    // 格式化冲突
+    let conflicts: Vec<(String, String, String, String)> = lock.diagnostics.conflicts.iter()
+        .map(|c| (c.package.clone(), c.chosen_version.clone(), c.source.clone(),
+                  format!("{} {}", c.required_op, c.required_ver)))
+        .collect();
+    let conflicts_desc = aevum_intent::ai_client::format_conflicts(&conflicts);
+
+    // 格式化各方案建议
+    let plan_a: Vec<(String, Option<String>)> = lock.diagnostics.repair_suggestions.iter()
+        .map(|s| (s.package.clone(), s.satisfying_version.clone()))
+        .collect();
+    let plan_b: Vec<(String, String, String, String)> = lock.diagnostics.repair_suggestions_b.iter()
+        .map(|b| (b.parent.clone(), b.upgrade_parent_to.clone(), b.dependency.clone(), b.dependency_version.clone()))
+        .collect();
+    let plan_c: Vec<(String, String, String)> = lock.diagnostics.keep_two_suggestions.iter()
+        .map(|c| (c.package.clone(), c.version_a.clone(), c.version_b.clone()))
+        .collect();
+    let suggestions_desc = aevum_intent::ai_client::format_suggestions(&plan_a, &plan_b, &plan_c);
+
+    println!("\n  🤖 AI 分析冲突中({}/{})...", ai_cfg.provider, ai_cfg.model);
+    match aevum_intent::ai_client::ai_evaluate_repair(&ai_cfg, &conflicts_desc, &suggestions_desc) {
+        Ok(decision) => {
+            println!("  AI 推荐方案 {}: {}", decision.chosen_plan, decision.action);
+            println!("  理由: {}", decision.reasoning);
+            if ai_cfg.auto_repair && decision.chosen_plan == "A" {
+                println!("  (auto_repair 开启 + 方案A 安全 → 可用 --repair 自动应用)");
+            } else if decision.chosen_plan != "A" {
+                println!("  (方案 {} 需人工确认,不自动执行)", decision.chosen_plan);
+            }
+        }
+        Err(e) => println!("  AI 分析失败(降级到上述确定性建议): {e}"),
     }
 }
 

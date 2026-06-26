@@ -300,4 +300,330 @@ mod tests {
     fn json_escape_works() {
         assert_eq!(json_escape("a\"b\nc"), r#"a\"b\nc"#);
     }
+
+    #[test]
+    fn chat_history_roundtrip() {
+        let path = std::env::temp_dir().join(format!("aevum-hist-{}.txt", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut h = ChatHistory::load(&path);
+        assert!(h.messages.is_empty());
+        h.push("user", "我要 python\n环境");
+        h.push("assistant", "好的");
+        h.save(&path, 20);
+        let h2 = ChatHistory::load(&path);
+        assert_eq!(h2.messages.len(), 2);
+        assert_eq!(h2.messages[0].content, "我要 python\n环境"); // 换行正确往返
+        assert_eq!(h2.messages[1].role, "assistant");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn history_truncates_to_max() {
+        let path = std::env::temp_dir().join(format!("aevum-hist-trunc-{}.txt", std::process::id()));
+        let mut h = ChatHistory { messages: Vec::new() };
+        for i in 0..30 {
+            h.push("user", &format!("msg{i}"));
+        }
+        h.save(&path, 10);
+        let h2 = ChatHistory::load(&path);
+        assert_eq!(h2.messages.len(), 10);
+        assert_eq!(h2.messages[0].content, "msg20"); // 保留最近 10 条
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+// ─────────────────────── AI 修复依赖冲突 ───────────────────────
+
+/// AI 修复建议:AI 评估后选择的方案。
+#[derive(Debug, Clone)]
+pub struct AiRepairDecision {
+    /// 选择的方案:"A"(放宽)/"B"(升级父包)/"C"(保留两份)/"D"(告知用户)
+    pub chosen_plan: String,
+    /// AI 的理由(人话解释)
+    pub reasoning: String,
+    /// 具体动作(如"放宽 libc6 到 2.35"或"升级 openssl 父包到 1.2")
+    pub action: String,
+}
+
+/// 用 AI 评估依赖冲突,选择最优修复方案。
+///
+/// 输入:冲突诊断信息(conflicts + 各方案建议)。
+/// 输出:AI 选的方案 + 理由 + 具体动作。
+pub fn ai_evaluate_repair(
+    config: &AiConfig,
+    conflicts_desc: &str,
+    suggestions_desc: &str,
+) -> Result<AiRepairDecision, String> {
+    let system_prompt = r#"你是 Aevum 包管理器的依赖冲突修复 AI。用户的系统出现了依赖版本冲突。
+你需要从给出的修复方案中选择最优的一个并解释理由。
+
+修复方案优先级(风险从低到高):
+- A(放宽约束):最安全,只改约束不改包,推荐优先用
+- B(升级父包):需要升级某些包到新版本,可能引入不兼容
+- C(保留两份):占磁盘但安全,两个版本各跑各的
+- D(告知用户):无法自动修复,需用户手动取舍
+
+请用以下精确格式回复(每行一个字段):
+PLAN: A|B|C|D
+ACTION: 具体动作描述(如"放宽 libc6 约束到 >=2.35")
+REASON: 一句话理由"#;
+
+    let user_msg = format!(
+        "依赖冲突:\n{conflicts_desc}\n\n可用修复方案:\n{suggestions_desc}\n\n请选择最优方案。"
+    );
+
+    let response = ai_chat(config, system_prompt, &user_msg)?;
+
+    // 解析 AI 响应
+    let mut plan = String::from("A");
+    let mut action = String::new();
+    let mut reasoning = String::new();
+
+    for line in response.lines() {
+        let line = line.trim();
+        if let Some(v) = line.strip_prefix("PLAN:") {
+            plan = v.trim().to_string();
+        } else if let Some(v) = line.strip_prefix("ACTION:") {
+            action = v.trim().to_string();
+        } else if let Some(v) = line.strip_prefix("REASON:") {
+            reasoning = v.trim().to_string();
+        }
+    }
+
+    if action.is_empty() {
+        // AI 没按格式回复,把整个响应当 reasoning
+        reasoning = response;
+        action = "见 AI 分析".into();
+    }
+
+    Ok(AiRepairDecision {
+        chosen_plan: plan,
+        reasoning,
+        action,
+    })
+}
+
+/// 格式化冲突诊断为人/AI 可读的文本。
+pub fn format_conflicts(conflicts: &[(String, String, String, String)]) -> String {
+    // 每个 tuple: (package, chosen_version, source, required_constraint)
+    let mut out = String::new();
+    for (pkg, chosen, source, required) in conflicts {
+        out.push_str(&format!("  {} 已选 {},但 {} 要求 {}\n", pkg, chosen, source, required));
+    }
+    out
+}
+
+/// 格式化修复建议为 AI 可读的文本。
+pub fn format_suggestions(
+    plan_a: &[(String, Option<String>)],   // (package, satisfying_version)
+    plan_b: &[(String, String, String, String)], // (parent, upgrade_to, dep, dep_ver)
+    plan_c: &[(String, String, String)],   // (package, ver_a, ver_b)
+) -> String {
+    let mut out = String::new();
+    if !plan_a.is_empty() {
+        out.push_str("方案A(放宽约束):\n");
+        for (pkg, ver) in plan_a {
+            match ver {
+                Some(v) => out.push_str(&format!("  {} → 可放宽到 {}\n", pkg, v)),
+                None => out.push_str(&format!("  {} → 无单一共存版本\n", pkg)),
+            }
+        }
+    }
+    if !plan_b.is_empty() {
+        out.push_str("方案B(升级父包):\n");
+        for (parent, upgrade_to, dep, dep_ver) in plan_b {
+            out.push_str(&format!("  升级 {} 到 {} → {} 取 {}\n", parent, upgrade_to, dep, dep_ver));
+        }
+    }
+    if !plan_c.is_empty() {
+        out.push_str("方案C(保留两份):\n");
+        for (pkg, va, vb) in plan_c {
+            out.push_str(&format!("  {} 保留 {} 与 {} 两份\n", pkg, va, vb));
+        }
+    }
+    if out.is_empty() {
+        out.push_str("方案D:无自动修复方案,需用户取舍。\n");
+    }
+    out
+}
+
+// ─────────────────────── 统一 AI 入口:多轮对话 + 意图分发 ───────────────────────
+
+/// 一条对话消息。
+#[derive(Debug, Clone)]
+pub struct ChatMessage {
+    pub role: String,    // "user" | "assistant"
+    pub content: String,
+}
+
+/// 对话历史(存盘,跨命令接续)。极简文本格式:每行 `role\tcontent`(content 转义换行)。
+pub struct ChatHistory {
+    pub messages: Vec<ChatMessage>,
+}
+
+impl ChatHistory {
+    /// 从历史文件加载;不存在则空。
+    pub fn load(path: &Path) -> Self {
+        let mut messages = Vec::new();
+        if let Ok(text) = std::fs::read_to_string(path) {
+            for line in text.lines() {
+                if let Some((role, content)) = line.split_once('\t') {
+                    messages.push(ChatMessage {
+                        role: role.to_string(),
+                        content: content.replace("\\n", "\n"),
+                    });
+                }
+            }
+        }
+        ChatHistory { messages }
+    }
+
+    /// 保存(只保留最近 max 条)。
+    pub fn save(&self, path: &Path, max: usize) {
+        let start = self.messages.len().saturating_sub(max);
+        let mut out = String::new();
+        for m in &self.messages[start..] {
+            out.push_str(&format!("{}\t{}\n", m.role, m.content.replace('\n', "\\n")));
+        }
+        let _ = std::fs::write(path, out);
+    }
+
+    pub fn push(&mut self, role: &str, content: &str) {
+        self.messages.push(ChatMessage { role: role.to_string(), content: content.to_string() });
+    }
+
+    pub fn reset(path: &Path) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// AI 判断的意图动作。
+#[derive(Debug, Clone)]
+pub struct AiAction {
+    /// install | explain | repair | list | search | remove | gc | chat
+    pub intent: String,
+    /// install/remove 时的包名
+    pub packages: Vec<String>,
+    /// search 时的关键词
+    pub query: String,
+    /// 给用户的回复
+    pub reply: String,
+}
+
+/// 统一 AI 入口:给定历史 + 当前输入,AI 判断意图并返回结构化动作。
+///
+/// AI 被要求输出结构化文本(INTENT/PACKAGES/QUERY/REPLY),CLI 据此分发。
+pub fn ai_dispatch(config: &AiConfig, history: &[ChatMessage], user_input: &str) -> Result<AiAction, String> {
+    let system_prompt = r#"你是 Aevum 包管理器的统一 AI 助手。用户用自然语言对话,你判断意图并回复。
+
+意图类型:
+- install: 用户想安装软件/搭环境(如"我要 python 环境")
+- remove: 用户想卸载包
+- search: 用户想搜索包
+- list: 用户想看已装了什么
+- gc: 用户想清理旧世代
+- explain: 用户问为什么出错/某概念
+- repair: 用户问依赖冲突怎么解决
+- chat: 闲聊或其它
+
+用以下精确格式回复(每个字段一行):
+INTENT: <上述类型之一>
+PACKAGES: <空格分隔的真实 Debian 包名,仅 install/remove 时;否则留空>
+QUERY: <搜索词,仅 search 时;否则留空>
+REPLY: <给用户的中文回复,一两句话说明你要做什么或解答>
+
+注意:install 时 PACKAGES 必须是真实 Debian 包名(全小写,如 python3 numpy git ripgrep)。
+结合对话历史理解"刚才""再加上"等指代。"#;
+
+    // 拼接历史 + 当前输入为多轮 messages
+    let mut messages: Vec<ChatMessage> = history.to_vec();
+    messages.push(ChatMessage { role: "user".into(), content: user_input.to_string() });
+
+    let response = ai_chat_history(config, system_prompt, &messages)?;
+
+    // 解析结构化输出
+    let mut action = AiAction {
+        intent: "chat".into(),
+        packages: Vec::new(),
+        query: String::new(),
+        reply: String::new(),
+    };
+    for line in response.lines() {
+        let line = line.trim();
+        if let Some(v) = line.strip_prefix("INTENT:") {
+            action.intent = v.trim().to_string();
+        } else if let Some(v) = line.strip_prefix("PACKAGES:") {
+            action.packages = v.split_whitespace().map(|s| s.to_string()).collect();
+        } else if let Some(v) = line.strip_prefix("QUERY:") {
+            action.query = v.trim().to_string();
+        } else if let Some(v) = line.strip_prefix("REPLY:") {
+            action.reply = v.trim().to_string();
+        }
+    }
+    // AI 没按格式 → 整个响应当 reply,意图 chat
+    if action.reply.is_empty() {
+        action.reply = response;
+    }
+    Ok(action)
+}
+
+/// 多轮对话:把历史 messages 全部塞进 API 请求(OpenAI 兼容 / Claude 都支持)。
+pub fn ai_chat_history(config: &AiConfig, system_prompt: &str, messages: &[ChatMessage]) -> Result<String, String> {
+    if !config.is_available() {
+        return Err(format!("AI 不可用(provider={}, 无 key)", config.provider));
+    }
+    if config.provider == "claude" {
+        return call_claude_history(config, system_prompt, messages);
+    }
+    // OpenAI 兼容:system + 历史 messages
+    let mut msg_json = format!(r#"{{"role":"system","content":"{}"}}"#, json_escape(system_prompt));
+    for m in messages {
+        msg_json.push_str(&format!(
+            r#",{{"role":"{}","content":"{}"}}"#,
+            m.role, json_escape(&m.content)
+        ));
+    }
+    let body = format!(
+        r#"{{"model":"{}","messages":[{}],"stream":false,"max_tokens":{},"temperature":{}}}"#,
+        config.model, msg_json, config.max_tokens, config.temperature
+    );
+
+    let mut cmd = std::process::Command::new("curl");
+    cmd.arg("-s").arg("--max-time").arg("60")
+        .arg(&config.endpoint)
+        .arg("-H").arg("Content-Type: application/json");
+    if !config.api_key.is_empty() {
+        cmd.arg("-H").arg(format!("Authorization: Bearer {}", config.api_key));
+    }
+    cmd.arg("-d").arg(&body);
+    let output = cmd.output().map_err(|e| format!("curl 失败: {e}"))?;
+    if !output.status.success() {
+        return Err(format!("AI 请求失败: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+    extract_openai_content(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Claude 多轮(system 单独字段,messages 数组)。
+fn call_claude_history(config: &AiConfig, system_prompt: &str, messages: &[ChatMessage]) -> Result<String, String> {
+    let mut msg_json = String::new();
+    for (i, m) in messages.iter().enumerate() {
+        if i > 0 { msg_json.push(','); }
+        msg_json.push_str(&format!(r#"{{"role":"{}","content":"{}"}}"#, m.role, json_escape(&m.content)));
+    }
+    let body = format!(
+        r#"{{"model":"{}","max_tokens":{},"system":"{}","messages":[{}]}}"#,
+        config.model, config.max_tokens, json_escape(system_prompt), msg_json
+    );
+    let output = std::process::Command::new("curl")
+        .arg("-s").arg("--max-time").arg("60")
+        .arg(&config.endpoint)
+        .arg("-H").arg("Content-Type: application/json")
+        .arg("-H").arg(format!("x-api-key: {}", config.api_key))
+        .arg("-H").arg("anthropic-version: 2023-06-01")
+        .arg("-d").arg(&body)
+        .output().map_err(|e| format!("curl 失败: {e}"))?;
+    if !output.status.success() {
+        return Err(format!("Claude 请求失败: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+    extract_claude_content(&String::from_utf8_lossy(&output.stdout))
 }

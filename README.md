@@ -77,6 +77,7 @@ Aevum 是一个用 Rust 实现的 Linux 用户态包管理器,核心理念:
 
 | 命令 | 功能 |
 |------|------|
+| `aevum ai "<自然语言>"` | **AI 统一入口**:自动判断意图(装包/解释/搜索...),多轮对话 |
 | `aevum install <pkg...>` | 快捷安装(自动求解+下载+建世代+激活+刷新 PATH) |
 | `aevum search <keyword>` | 搜索可安装的包 |
 | `aevum list` | 列出当前世代的包 |
@@ -91,7 +92,8 @@ Aevum 是一个用 Rust 实现的 Linux 用户态包管理器,核心理念:
 | `aevum audit-config <ts> --against <lock>` | 检测配置是否漂移 |
 | `aevum export-system --generation <N>` | 导出可运行 rootfs(chroot/nspawn) |
 | `aevum gc --keep <N>` | 垃圾回收(保留最近 N 个世代) |
-
+| `aevum explain <message>` | AI 解释错误/给建议 |
+| `aevum maintain --intent "<自然语言>"` | AI 翻译意图 → 求解安装 |
 ---
 
 ## 安装
@@ -247,6 +249,55 @@ sudo chroot /tmp/my-rootfs /bin/sh
 # 检测源配置是否与 lock 一致(CI 友好,漂移时返回非零)
 aevum audit-config my-system.config.ts --against my-lock
 ```
+
+---
+
+## AI 功能
+
+Aevum 的 AI 是**可选增强**(无 AI 时确定性核心照常工作)。你只需记**一个命令** `aevum ai`。
+
+### 配置(一次性)
+
+编辑 `$AEVUM_ROOT/config.toml`:
+
+```toml
+[ai]
+provider = "deepseek"   # deepseek / openai / claude / ollama
+api_key = "sk-..."      # 或设环境变量 AEVUM_AI_KEY
+```
+
+| Provider | Endpoint | Key 环境变量 |
+|----------|----------|-------------|
+| deepseek | api.deepseek.com | `DEEPSEEK_API_KEY` |
+| openai | api.openai.com | `OPENAI_API_KEY` |
+| claude | api.anthropic.com | `ANTHROPIC_API_KEY` |
+| ollama | localhost:11434 | 无需(本地) |
+
+### `aevum ai` —— 一个命令,自然语言,自动判断意图
+
+```bash
+aevum ai "我要个 python 数据科学环境"
+# 💬 我帮你装 python3 + numpy + pandas + jupyter
+# → 意图: 安装 → 确认? → 装
+
+aevum ai "再加上 git"            # 多轮:读历史,理解"再加上"
+aevum ai "为什么 numpy 装不上"   # 自动判断 → 解释
+aevum ai "libfoo 和 libbar 冲突咋办"  # 自动判断 → 分析依赖冲突
+aevum ai "列出装了什么"          # 自动判断 → 列包
+aevum ai --reset                 # 清空对话历史,开新话题
+```
+
+AI 自己判断意图(install / explain / repair / search / list / gc / chat),
+分发到对应动作。**有副作用的动作(装包/卸载)默认要确认**,只读的直接执行。
+对话历史存盘(`ai-history.txt`),支持多轮接续。
+
+### AI 的边界(ADR-0003/0005)
+
+- AI 只在 **lock 之前**介入(判断意图、翻译包名、评估冲突修复)
+- lock 之后的 propose/verify/activate **全程无 AI**——可复现只来自 lock
+- AI 不可用时,确定性核心(install/求解/世代)照常工作;意图翻译降级到离线 Mock
+
+> 底层命令(`maintain --intent`、`explain`、`install` 等)仍可直接用,但日常推荐 `aevum ai`。
 
 ---
 
