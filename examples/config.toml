@@ -1,0 +1,27 @@
+# Aevum AI 配置示例
+# 放在 $AEVUM_ROOT/config.toml 或 ~/.config/aevum/config.toml
+
+[ai]
+# 可选:openai / claude / deepseek / ollama
+provider = "deepseek"
+
+# API key(也可用环境变量 AEVUM_AI_KEY 或 DEEPSEEK_API_KEY)
+api_key = ""
+
+# 模型名(各 provider 的默认值见下)
+model = "deepseek-chat"
+
+# API endpoint(自定义,如本地 Ollama)
+# endpoint = "http://localhost:11434/v1/chat/completions"
+
+# 温度(0-1,越低越确定性)
+temperature = "0.3"
+
+# 是否自动修复冲突(repair 时 AI 评估最优方案并执行;false 时只建议)
+auto_repair = "false"
+
+# --- provider 预设 ---
+# deepseek: endpoint=https://api.deepseek.com/v1/chat/completions, model=deepseek-chat
+# openai:   endpoint=https://api.openai.com/v1/chat/completions, model=gpt-4o-mini
+# claude:   endpoint=https://api.anthropic.com/v1/messages, model=claude-sonnet-4-20250514
+# ollama:   endpoint=http://localhost:11434/v1/chat/completions, model=llama3

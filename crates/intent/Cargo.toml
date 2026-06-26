@@ -11,4 +11,5 @@ path = "src/lib.rs"
 
 [dependencies]
 aevum-solver.workspace = true
+aevum-service-compiler.workspace = true
 thiserror.workspace = true

@@ -89,6 +89,11 @@ enum Command {
         #[arg(long, default_value = "trixie")]
         dist: String,
     },
+    /// AI 解释错误或给出建议(用配置的 AI 模型分析问题并给出人话解释)。
+    Explain {
+        /// 要解释的内容(错误信息、包名、概念等)。
+        message: String,
+    },
     /// 搜索可安装的包(grep Debian 索引)。
     Search {
         /// 搜索关键词(包名或描述中的子串)。
@@ -555,6 +560,24 @@ fn main() -> anyhow::Result<()> {
             }
             let size = std::fs::metadata(layout.index_file())?.len();
             println!("  ✓ 索引已更新: {} ({:.1} MB)", layout.index_file().display(), size as f64 / 1_048_576.0);
+        }
+        Command::Explain { message } => {
+            let config_path = layout.root.join("config.toml");
+            let ai_cfg = aevum_intent::ai_client::AiConfig::load(&config_path);
+            if !ai_cfg.is_available() {
+                return Err(anyhow::anyhow!(
+                    "AI 不可用。配置方法:\n  1. 设环境变量 AEVUM_AI_KEY=<your-key>\n  2. 或编辑 {}/config.toml 的 [ai] 段\n  \n  支持: deepseek / openai / claude / ollama(本地无需 key)",
+                    layout.root.display()
+                ));
+            }
+            println!("[explain] 使用 {} ({})...", ai_cfg.provider, ai_cfg.model);
+            let system_prompt = "你是 Aevum 包管理器的 AI 助手。用户遇到了问题或有疑问。\
+                请用简洁的中文解释问题原因,并给出具体的解决建议。\
+                如果涉及包名,用真实 Debian/Nix 包名。格式:先一句话总结,再分点给建议。";
+            match aevum_intent::ai_client::ai_chat(&ai_cfg, system_prompt, &message) {
+                Ok(response) => println!("\n{response}"),
+                Err(e) => println!("AI 调用失败: {e}"),
+            }
         }
         Command::Search { keyword, limit } => {
             let index_path = layout.index_file();

@@ -7,7 +7,11 @@
 //! - [`MockIntentResolver`]:规则映射,离线、确定性、可测(不调网络/模型)。
 //! - [`DeepSeekResolver`]:经系统 `curl` 调 DeepSeek(不引 Rust HTTP/JSON 依赖,沿用 zstd/gunzip 套路)。
 //!
+//! 统一 AI 客户端([`ai_client`]):支持 DeepSeek/OpenAI/Claude/Ollama,从 config.toml 配置。
+//!
 //! ADR-0005:确定性核心离线永久可用;AI 增强可选,模型不可用则 Err → 调用方降级到显式约束。
+
+pub mod ai_client;
 
 use aevum_solver::version::VerOp;
 use aevum_solver::Constraint;
