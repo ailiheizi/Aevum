@@ -4,6 +4,52 @@
 
 ---
 
+## 2026-06-26(五)—— 统一 `aevum ai` 入口 + AI 修依赖冲突端到端验证
+
+把分散的 AI 能力(意图翻译 / explain / 冲突 repair)收敛成**一个命令** `aevum ai "<话>"`,
+并用真实 DeepSeek 对 4 个依赖冲突场景做了端到端验证。
+
+### `aevum ai`:一个命令处理所有
+
+- AI 一次调用判断意图(install / explain / repair / search / list / gc / chat)+ 给回复,CLI 据此分发。
+- 多轮对话:历史存 `$AEVUM_ROOT/ai-history.txt`(role\tcontent,换行转义,保留最近 20 条),跨命令接续。
+- `--reset` 清空历史;`--yes` 跳过确认。
+- 有副作用的动作(install/remove/gc)默认要确认,只读的(explain/search/list/chat)直接执行。
+- AI 不可用时报错提示配置,底层命令(install 等)仍可直接用;意图翻译降级到离线 Mock。
+
+### AI 修依赖冲突 —— 4 场景真实验证(DeepSeek)
+
+| 场景 | 冲突构造 | 求解器可行解 | AI 决策 | 对 |
+|------|---------|------------|--------|----|
+| 1 | libssl `>=3.0` + `<=3.2` | 有交集,无冲突 | 不误报 | ✅ |
+| 2 | libfoo `=1.0` vs `=2.0` | 无交集,A 失效 | 方案C 保留两份 | ✅ |
+| 3 | libhttp 贪心选 3.0 违反 `<=2.0` | A 可解(钉 2.0) | 方案A 放宽(风险最低) | ✅ |
+| 4 | libcore `=1/=2/=3` 三方互斥 | C 也救不全 | 方案D 交用户决策 | ✅ |
+
+**关键观察**:AI 的推荐**跟着确定性求解器算出的可行方案走**,不是瞎猜——能放宽就 A,不能就 C,
+连两份都救不了就老实交 D。守住 ADR-0003 红线(AI 选方案/给理由,确定性求解器算具体版本);C/D 标"需人工确认"。
+
+### 回归测试(离线、不依赖网络/key)
+
+- 把解析逻辑抽成纯函数 `parse_dispatch_response` / `parse_repair_response`(从 `ai_dispatch` / `ai_evaluate_repair` 提取)。
+- 用上面 4 个场景真实抓到的 AI 响应文本固化成 9 个新测试:dispatch 的 install/explain/list/search 意图 + 畸形响应降级 chat;repair 的 A/C/D 方案 + 畸形响应回落 A。
+- **安全兜底**:AI 不按格式回复时,意图降级 chat、修复降级 A 占位,绝不误触发安装/卸载。
+- intent crate 22 测全过;全 workspace lib 套件 158 测 0 失败。
+
+### 涉及文件
+
+- `crates/intent/src/ai_client.rs`:`ChatHistory` / `ai_dispatch` / `ai_chat_history` / `parse_dispatch_response` / `parse_repair_response` + 9 测试
+- `crates/cli/src/main.rs`:`Command::Ai`(分发 handler)+ 提取 `do_install` 共享核心
+- `README.md`:主推 `aevum ai` 为单一 AI 入口
+- commit:`72771ae`(统一入口)、`2eb0bd9`(解析回归测试)
+
+### 局限
+
+- 端到端的真实 AI 链路需要 API key(验证用的 key 未入库);无 key 时只跑离线解析回归。
+- 意图判断依赖 prompt 工程,极端模糊输入可能误判(已用畸形响应降级 chat 兜底,不会误执行副作用)。
+
+---
+
 ## 2026-06-23(一)—— 第五十六轮补充:QEMU 引导验证("Aevum 发行版"在虚拟机里启动)
 
 在第五十六轮 export-system 基础上,验证了完整的"发行版引导"链路:
