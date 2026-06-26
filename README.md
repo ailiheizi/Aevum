@@ -93,7 +93,7 @@ Aevum is a Linux userspace package manager written in Rust. Its core ideas:
 | `aevum nix-fetch <hash> --activate` | Fetch a package and link it into profile/bin |
 | `aevum audit-config <ts> --against <lock>` | Detect configuration drift (CI-friendly) |
 | `aevum export-system <gen>` | Export a runnable rootfs (chroot/nspawn/QEMU) |
-| `aevum gc --keep <N>` | Garbage-collect (keep the most recent N generations) |
+| `aevum gc --keep <gen-id,...>` | Garbage-collect (keep objects referenced by the listed generation IDs) |
 | `aevum explain <message>` | AI explains an error / gives advice |
 
 > The CLI exposes more advanced commands (`verify`, `activate`, `build`, `compose-generation`, `export-bootroot`, `boot-menu`, `service`, `etc`). Run `aevum --help` for the full list.
@@ -234,8 +234,8 @@ aevum switch 2
 # roll back
 aevum rollback 1
 
-# garbage collect (keep the most recent 3)
-aevum gc --keep 3
+# garbage collect (keep objects referenced by generations 1, 2 and 3)
+aevum gc --keep 1,2,3
 ```
 
 ### 5. Export a runnable system

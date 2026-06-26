@@ -93,7 +93,7 @@ Aevum 是一个用 Rust 实现的 Linux 用户态包管理器,核心理念:
 | `aevum nix-fetch <hash> --activate` | 拉包并链到 profile/bin |
 | `aevum audit-config <ts> --against <lock>` | 检测配置是否漂移 |
 | `aevum export-system <gen>` | 导出可运行 rootfs(chroot/nspawn) |
-| `aevum gc --keep <N>` | 垃圾回收(保留最近 N 个世代) |
+| `aevum gc --keep <gen-id,...>` | 垃圾回收(保留指定世代 id 引用的对象) |
 | `aevum explain <message>` | AI 解释错误/给建议 |
 
 > CLI 还有更多进阶命令(`verify`、`activate`、`build`、`compose-generation`、`export-bootroot`、`boot-menu`、`service`、`etc`)。跑 `aevum --help` 看完整列表。
@@ -234,8 +234,8 @@ aevum switch 2
 # 回滚
 aevum rollback 1
 
-# 垃圾回收(保留最近 3 个)
-aevum gc --keep 3
+# 垃圾回收(保留世代 1、2、3 引用的对象)
+aevum gc --keep 1,2,3
 ```
 
 ### 5. 导出可运行系统
