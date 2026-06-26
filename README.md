@@ -2,51 +2,53 @@
 
 <div align="center">
 
-**AI-native、可复现、原子化的 Linux 用户态包管理器**
+**An AI-native, reproducible, atomic package manager for the Linux userspace**
 
-**消费 Debian + Nix 两大生态的预编译包,用 TypeScript 声明意图,一键装系统**
+**Consumes prebuilt packages from both the Debian and Nix ecosystems. Declares intent in TypeScript. Installs a system in one command.**
 
 [![Status](https://img.shields.io/badge/status-functional--prototype-green.svg)](docs/README.md)
 [![Rust](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
+English · [简体中文](README.zh-CN.md)
+
 </div>
 
 ---
 
-## 快速开始
+## Quick start
 
 ```bash
-# 1. 初始化(一次性)
-aevum update                    # 下载 Debian 包索引
-source $AEVUM_ROOT/profile/env.sh  # 加到 .bashrc
+# 1. Initialize (one-time)
+aevum update                        # download the Debian package index
+source $AEVUM_ROOT/profile/env.sh   # add this to your .bashrc
 
-# 2. 装包(像 apt 一样简单)
+# 2. Install packages (as simple as apt)
 aevum install ripgrep foot busybox-static
 
-# 3. 直接用!
+# 3. Use them right away
 rg --version    # ripgrep 14.1.1
-foot --version  # Wayland 终端 1.21.0
-busybox ls /    # busybox 内置命令
+foot --version  # Wayland terminal 1.21.0
+busybox ls /    # busybox builtins
 
-# 搜索 / 列出 / 移除
-aevum search wayland   # 搜索可装的包
-aevum list             # 列出当前装了什么
-aevum remove foot      # 移除(建新世代,可回滚)
-aevum rollback 1       # 秒回上一个状态
+# search / list / remove
+aevum search wayland   # search installable packages
+aevum list             # list what's installed in the active generation
+aevum remove foot      # remove (builds a new generation, rollback-able)
+aevum rollback 1       # instantly return to a previous state
 ```
 
-或者从 **Nix binary cache** 拉任意 nixpkgs 的包:
+Or pull any nixpkgs package straight from a **Nix binary cache**:
 
 ```bash
-# 从 Nix 镜像拉 niri(Wayland tiling compositor)+ 全部 242 个依赖
+# fetch niri (Wayland tiling compositor) + all 242 deps from a Nix mirror
 aevum nix-fetch --resolve niri --activate
 
-# 直接可用(通过同一个 profile/bin PATH)
+# usable immediately, through the same profile/bin PATH
 niri --version  # niri 26.04 (Nixpkgs)
 ```
 
-或者用 **TS 配置** 声明复杂系统:
+Or declare a complex system with a **TypeScript config**:
 
 ```bash
 cat > my-system.config.ts << 'EOF'
@@ -56,131 +58,136 @@ export default defineSystem(() => ({
 EOF
 
 aevum maintain --config my-system.config.ts --gen 1 \
-  --mirror http://mirrors.ustc.edu.cn/debian --yes --confirm
+  --mirror http://deb.debian.org/debian --yes --confirm
 ```
 
 ---
 
-## 这是什么
+## What is this
 
-Aevum 是一个用 Rust 实现的 Linux 用户态包管理器,核心理念:
+Aevum is a Linux userspace package manager written in Rust. Its core ideas:
 
-- **不自建包生态**:消费 Debian 镜像(.deb)和 Nix binary cache(NAR)两大现有生态的预编译包
-- **TypeScript 声明意图**:用主流语言(不是 Nix 语言)在沙箱里声明系统配置,确定性求解
-- **内容寻址 store**:每个文件按 SHA256 hash 存储,天然去重、可复现
-- **原子世代切换**:每次变更是一个不可变的 generation,一键回滚
-- **AI 增强可选**:AI 翻译自然语言意图、自动修复冲突,但 AI 是可选增强不是门槛
+- **No homegrown package ecosystem.** It consumes prebuilt packages from two existing ecosystems: Debian mirrors (`.deb`) and the Nix binary cache (`NAR`).
+- **Intent declared in TypeScript.** You describe your system in a mainstream language (not the Nix language), evaluated in a sandbox, then resolved deterministically.
+- **Content-addressed store.** Every file is stored by its SHA256 hash — natural deduplication and reproducibility.
+- **Atomic generations.** Every change is an immutable generation; roll back in one command.
+- **Optional AI.** AI translates natural-language intent and proposes conflict repairs — but it's an optional enhancement, never a requirement. The deterministic core works fully offline.
 
 ---
 
-## 核心命令
+## Core commands
 
-| 命令 | 功能 |
-|------|------|
-| `aevum ai "<自然语言>"` | **AI 统一入口**:自动判断意图(装包/解释/搜索...),多轮对话 |
-| `aevum install <pkg...>` | 快捷安装(自动求解+下载+建世代+激活+刷新 PATH) |
-| `aevum search <keyword>` | 搜索可安装的包 |
-| `aevum list` | 列出当前世代的包 |
-| `aevum remove <pkg...>` | 移除包(建新世代) |
-| `aevum update` | 更新 Debian 包索引 |
-| `aevum maintain --config <ts>` | 从 TS 配置全链路:求解→下载→入库→建世代→verify→激活 |
-| `aevum resolve --config <ts>` | 只求解产 lock(不下载安装) |
-| `aevum switch <gen>` | 切换世代(原子,自动刷新 profile) |
-| `aevum rollback <gen>` | 回滚到历史世代 |
-| `aevum nix-fetch --resolve <name>` | 从 Nix cache 拉包+依赖 |
-| `aevum nix-fetch <hash> --activate` | 拉包并链到 profile/bin |
-| `aevum audit-config <ts> --against <lock>` | 检测配置是否漂移 |
-| `aevum export-system --generation <N>` | 导出可运行 rootfs(chroot/nspawn) |
-| `aevum gc --keep <N>` | 垃圾回收(保留最近 N 个世代) |
-| `aevum explain <message>` | AI 解释错误/给建议 |
-| `aevum maintain --intent "<自然语言>"` | AI 翻译意图 → 求解安装 |
+| Command | What it does |
+|---------|--------------|
+| `aevum ai "<natural language>"` | **Unified AI entry** — detects intent (install / explain / search …), multi-turn dialogue |
+| `aevum install <pkg...>` | Quick install (resolve → download → store → new generation → activate → refresh PATH) |
+| `aevum search <keyword>` | Search installable packages |
+| `aevum list` | List packages in the active generation |
+| `aevum remove <pkg...>` | Remove packages (builds a new generation) |
+| `aevum update` | Refresh the Debian package index |
+| `aevum maintain --config <ts>` | Full pipeline from a TS config: resolve → download → store → generation → verify → activate |
+| `aevum resolve --config <ts>` | Resolve only, produce a lock (no download/install) |
+| `aevum switch <gen>` | Switch generation (atomic, refreshes profile automatically) |
+| `aevum rollback <gen>` | Roll back to a historical generation |
+| `aevum nix-fetch --resolve <name>` | Fetch a package + deps from a Nix cache |
+| `aevum nix-fetch <hash> --activate` | Fetch a package and link it into profile/bin |
+| `aevum audit-config <ts> --against <lock>` | Detect configuration drift (CI-friendly) |
+| `aevum export-system --generation <N>` | Export a runnable rootfs (chroot/nspawn/QEMU) |
+| `aevum gc --keep <N>` | Garbage-collect (keep the most recent N generations) |
+| `aevum explain <message>` | AI explains an error / gives advice |
+
+> The CLI exposes more advanced commands (`verify`, `activate`, `build`, `compose-generation`, `export-bootroot`, `boot-menu`, `service`, `etc`). Run `aevum --help` for the full list.
+
 ---
 
-## 安装
+## Install
 
-### 前置条件
+### Prerequisites
 
-- Linux(原生或 WSL2)
-- Rust 1.85+(编译用)
-- `curl`、`ar`、`tar`、`xz`(运行时,下载解包用)
+- Linux (native or WSL2)
+- Rust 1.85+ (to build)
+- `curl`, `ar`, `tar`, `xz` (runtime — used to download and unpack)
 
-### 从源码编译
+### Build from source
 
 ```bash
-git clone <repo>
+git clone https://github.com/ailiheizi/Aevum
 cd Aevum
 cargo build --release -p aevum-cli
-# 二进制在 target/release/aevum
+# binary at target/release/aevum
 ```
 
-### 初始化
+> On Windows, build inside WSL2 — NTFS does not support the symlinks Aevum relies on.
+
+### Initialize
 
 ```bash
-export AEVUM_ROOT=~/.aevum  # 或任意目录
+export AEVUM_ROOT=~/.aevum  # or any directory
 mkdir -p $AEVUM_ROOT
 
-# 拉 Debian 包索引(一次性)
-bash scripts/prep-index.sh
-# 这会下载 Debian Packages 文件到 $AEVUM_ROOT/index/
+# fetch the Debian package index (one-time)
+aevum update
 
-# 确保 PATH 含 profile/bin
+# make sure profile/bin is on your PATH
 echo 'export PATH="$AEVUM_ROOT/profile/bin:$PATH"' >> ~/.bashrc
 ```
 
 ---
 
-## 使用教程
+## Tutorial
 
-### 1. TS 配置前端
+### 1. TypeScript config frontend
 
-Aevum 用 TypeScript 声明系统意图(在纯 Rust boa 沙箱里求值,不需要 Node.js):
+Aevum declares system intent in TypeScript, evaluated in a pure-Rust [boa](https://github.com/boa-dev/boa) sandbox (no Node.js required):
 
 ```typescript
 // aevum.config.ts
 import { defineSystem, useTemplate } from "@aevum/sdk";
 
 export default defineSystem((inputs) => {
-  // 选用模板(蓝图,展开成一组包约束)
+  // pick a template (a blueprint that expands into a set of package constraints)
   const sys = useTemplate("minimal-desktop");
 
-  // 按输入条件启用
+  // conditional enablement
   if (inputs.role === "developer") {
     sys.use("python3");
     sys.use("git");
   }
 
-  // 循环
+  // loops
   for (const tool of inputs.tools ?? []) {
     sys.use(tool);
   }
 
-  // 钉版本
+  // pin a version
   sys.override("python3", { version: "3.11" });
 
-  // 排除
+  // exclude a package
   sys.exclude("telemetry-agent");
 
   return sys;
 });
 ```
 
-运行:
+Run it:
 ```bash
 aevum maintain --config aevum.config.ts \
   --inputs '{"role":"developer","tools":["ripgrep"]}' \
-  --gen 1 --mirror http://mirrors.ustc.edu.cn/debian --yes --confirm
+  --gen 1 --mirror http://deb.debian.org/debian --yes --confirm
 ```
 
-### 2. 模板系统
+The TS sandbox forbids IO, network, clock, and randomness, and restricts imports to an allowlist — so config evaluation stays deterministic (ADR-0004).
 
-模板是声明式蓝图(`templates/<name>.toml`),声明"想要什么能力":
+### 2. Templates
+
+Templates are declarative blueprints (`templates/<name>.toml`) describing the *capabilities* you want:
 
 ```toml
 # templates/dev-rust.toml
 [template]
 name = "dev-rust"
 version = "1.0.0"
-extends = ["minimal-desktop"]  # 继承
+extends = ["minimal-desktop"]  # inheritance
 
 [capability.rustc]
 constraint = ">=1.75"
@@ -194,194 +201,209 @@ layer_hint = "app"
 default = "true"
 ```
 
-模板支持继承(extends)、无环校验、optional 开关、override 覆盖。
+Templates support inheritance (`extends`), cycle checking, optional toggles, and `override`.
 
-### 3. Nix 包源
+### 3. The Nix package source
 
-从 Nix binary cache 拉取任意 nixpkgs 包(无需安装 Nix):
+Fetch any nixpkgs package from a Nix binary cache (no Nix installation required):
 
 ```bash
-# 按包名查找 + 递归拉依赖 + 链到 PATH
+# look up by name + recursively fetch deps + link into PATH
 aevum nix-fetch --resolve ripgrep --activate
 aevum nix-fetch --resolve niri --activate
 aevum nix-fetch --resolve helix --activate
 
-# 或直接指定 store hash
+# or specify a store hash directly
 aevum nix-fetch f4y36sn7m173qvdija8a1p6v81py66ns --activate
 
-# 自定义镜像
+# custom mirror / channel
 aevum nix-fetch --resolve firefox \
   --mirror https://mirrors.tuna.tsinghua.edu.cn/nix-channels/store \
   --channel https://mirrors.tuna.tsinghua.edu.cn/nix-channels/nixpkgs-unstable
 ```
 
-### 4. 世代管理
+### 4. Generation management
 
 ```bash
-# 查看世代
+# list generations
 ls $AEVUM_ROOT/generations/
 
-# 切换(原子,自动刷新 profile/bin)
+# switch (atomic, refreshes profile/bin automatically)
 aevum switch 2
 
-# 回滚
+# roll back
 aevum rollback 1
 
-# 垃圾回收(保留最近 3 个)
+# garbage collect (keep the most recent 3)
 aevum gc --keep 3
 ```
 
-### 5. 导出可运行系统
+### 5. Export a runnable system
 
 ```bash
-# 导出 rootfs(可直接 chroot/nspawn/QEMU)
+# export a rootfs (chroot/nspawn/QEMU-ready)
 aevum export-system --generation 1 --out /tmp/my-rootfs
 
-# 进入
+# enter it
 sudo systemd-nspawn -D /tmp/my-rootfs
-# 或
+# or
 sudo chroot /tmp/my-rootfs /bin/sh
 ```
 
-### 6. 配置漂移检测
+### 6. Configuration drift detection
 
 ```bash
-# 检测源配置是否与 lock 一致(CI 友好,漂移时返回非零)
+# check the source config still matches the lock (CI-friendly; non-zero exit on drift)
 aevum audit-config my-system.config.ts --against my-lock
 ```
 
 ---
 
-## AI 功能
+## AI features
 
-Aevum 的 AI 是**可选增强**(无 AI 时确定性核心照常工作)。你只需记**一个命令** `aevum ai`。
+Aevum's AI is an **optional enhancement** (the deterministic core works without it). You only need to remember **one command**: `aevum ai`.
 
-### 配置(一次性)
+### Configure (one-time)
 
-编辑 `$AEVUM_ROOT/config.toml`:
+Edit `$AEVUM_ROOT/config.toml`:
 
 ```toml
 [ai]
 provider = "deepseek"   # deepseek / openai / claude / ollama
-api_key = "sk-..."      # 或设环境变量 AEVUM_AI_KEY
+api_key = "sk-..."      # or set the AEVUM_AI_KEY environment variable
 ```
 
-| Provider | Endpoint | Key 环境变量 |
-|----------|----------|-------------|
+| Provider | Endpoint | Key environment variable |
+|----------|----------|--------------------------|
 | deepseek | api.deepseek.com | `DEEPSEEK_API_KEY` |
 | openai | api.openai.com | `OPENAI_API_KEY` |
 | claude | api.anthropic.com | `ANTHROPIC_API_KEY` |
-| ollama | localhost:11434 | 无需(本地) |
+| ollama | localhost:11434 | none (local) |
 
-### `aevum ai` —— 一个命令,自然语言,自动判断意图
+### `aevum ai` — one command, natural language, automatic intent detection
 
 ```bash
-aevum ai "我要个 python 数据科学环境"
-# 💬 我帮你装 python3 + numpy + pandas + jupyter
-# → 意图: 安装 → 确认? → 装
+aevum ai "I want a Python data-science environment"
+# 💬 I'll install python3 + numpy + pandas + jupyter
+# → intent: install → confirm? → install
 
-aevum ai "再加上 git"            # 多轮:读历史,理解"再加上"
-aevum ai "为什么 numpy 装不上"   # 自动判断 → 解释
-aevum ai "libfoo 和 libbar 冲突咋办"  # 自动判断 → 分析依赖冲突
-aevum ai "列出装了什么"          # 自动判断 → 列包
-aevum ai --reset                 # 清空对话历史,开新话题
+aevum ai "also add git"            # multi-turn: reads history, understands "also"
+aevum ai "why won't numpy install" # auto-detects → explain
+aevum ai "libfoo and libbar conflict, what now"  # auto-detects → analyze dependency conflict
+aevum ai "list what's installed"   # auto-detects → list
+aevum ai --reset                   # clear conversation history, start fresh
 ```
 
-AI 自己判断意图(install / explain / repair / search / list / gc / chat),
-分发到对应动作。**有副作用的动作(装包/卸载)默认要确认**,只读的直接执行。
-对话历史存盘(`ai-history.txt`),支持多轮接续。
+The AI detects intent on its own (install / explain / repair / search / list / gc / chat) and dispatches to the matching action. **Side-effecting actions (install/remove) ask for confirmation by default**; read-only ones run directly. Conversation history is persisted (`ai-history.txt`) for multi-turn continuity.
 
-### AI 的边界(ADR-0003/0005)
+### AI repairs dependency conflicts
 
-- AI 只在 **lock 之前**介入(判断意图、翻译包名、评估冲突修复)
-- lock 之后的 propose/verify/activate **全程无 AI**——可复现只来自 lock
-- AI 不可用时,确定性核心(install/求解/世代)照常工作;意图翻译降级到离线 Mock
+When a version conflict arises, the deterministic solver first computes the feasible repair plans (A relax / B bump parent / C keep-two / D tell-the-user). The AI then **picks the lowest-risk plan and explains why** — following the solver's feasible options, never inventing versions:
 
-> 底层命令(`maintain --intent`、`explain`、`install` 等)仍可直接用,但日常推荐 `aevum ai`。
+```
+⚠ 1 version conflict detected:
+    libfoo selected 1.0, but app-q requires (= 2.0) — unsatisfied
+    ↳ Plan A not applicable: no single libfoo version satisfies ["= 1.0", "= 2.0"]
+    ↳ Plan C (needs confirmation): keep two libfoo — 1.0 for app-p, 2.0 for app-q
+
+  🤖 Analyzing conflict (deepseek/deepseek-chat)...
+  AI recommends Plan C: keep both libfoo 1.0 and 2.0
+  Reason: libfoo can't coexist by relaxing constraints; keeping two is safe and won't affect other deps.
+  (Plan C needs manual confirmation, not auto-applied)
+```
+
+### The AI boundary (ADR-0003 / ADR-0005)
+
+- AI only intervenes **before the lock** (detecting intent, translating package names, evaluating conflict repairs).
+- After the lock, `propose` / `verify` / `activate` are **entirely AI-free** — reproducibility comes only from the lock.
+- When AI is unavailable, the deterministic core (install / resolve / generations) keeps working; intent translation degrades to an offline Mock.
+
+> The lower-level commands (`maintain --intent`, `explain`, `install`, …) still work directly, but `aevum ai` is the recommended daily entry point.
 
 ---
 
-## 架构
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  意图层(TS 前端 / TOML / 自然语言 / 模板)             │
+│  Intent layer (TS frontend / TOML / natural language / templates) │
 ├─────────────────────────────────────────────────────────┤
-│  确定性求解器(6.8 万包索引,可复现)                    │
+│  Deterministic solver (68k-package index, reproducible)  │
 ├─────────────────────────────────────────────────────────┤
-│  内容寻址 Store(SHA256 + 去重)                         │
+│  Content-addressed store (SHA256 + dedup)                │
 ├────────────────────────┬────────────────────────────────┤
-│  Debian .deb 源        │  Nix binary cache 源           │
+│  Debian .deb source    │  Nix binary cache source        │
 ├────────────────────────┴────────────────────────────────┤
-│  世代管理(原子切换 / 回滚 / GC / verify 门禁)         │
+│  Generation management (atomic switch / rollback / GC / verify gate) │
 ├─────────────────────────────────────────────────────────┤
-│  Profile/bin(统一 PATH 入口)                           │
+│  Profile/bin (unified PATH entry point)                  │
 └─────────────────────────────────────────────────────────┘
 ```
 
-### Crate 结构(12 个)
+### Crate layout
 
-| Crate | 功能 |
-|-------|------|
-| `cli` | 命令行入口 + 编排逻辑 |
-| `solver` | 确定性闭包求解器 |
-| `store` | 内容寻址对象存储 |
-| `generation` | 世代管理(创建/切换/回滚/GC) |
-| `config-ts` | TS 前端(boa 沙箱求值) |
-| `template` | 模板系统(继承/合并/展开) |
-| `nix-source` | Nix binary cache 客户端(NAR 解包) |
-| `intent` | AI 意图翻译层 |
-| `closure-builder` | ELF 运行闭包构建 |
-| `maintainer` | verify 门禁(完整性/闭合/层) |
-| `service-compiler` | s6 服务编译 |
-| `etc-builder` | /etc 配置编译 |
-| `elf` | ELF 解析(DT_NEEDED) |
+| Crate | Responsibility |
+|-------|----------------|
+| `cli` | Command-line entry point + orchestration |
+| `solver` | Deterministic closure solver |
+| `store` | Content-addressed object store |
+| `generation` | Generation management (create / switch / rollback / GC) |
+| `config-ts` | TS frontend (boa sandbox evaluation) |
+| `template` | Template system (inheritance / merge / expansion) |
+| `nix-source` | Nix binary cache client (NAR unpacker) |
+| `intent` | AI intent-translation layer |
+| `closure-builder` | ELF runtime closure builder |
+| `maintainer` | Verify gate (integrity / closure / layers) |
+| `service-compiler` | s6 service compilation |
+| `etc-builder` | `/etc` config compilation |
+| `elf` | ELF parsing (DT_NEEDED) |
 
 ---
 
-## 与 NixOS 的关系
+## Relationship to NixOS
 
-Aevum **不是 NixOS 的替代品**,而是走了一条不同的路:
+Aevum **is not a NixOS replacement** — it takes a different path:
 
 | | NixOS | Aevum |
 |---|---|---|
-| 包生态 | 自建(nixpkgs 8万+) | 消费 Debian + Nix 两家 |
-| 配置语言 | Nix(小众 DSL) | TypeScript(主流,沙箱化) |
-| 构建系统 | derivation(从源码) | 直接消费预编译包 |
-| AI 角色 | 无(nixai 是外挂) | 内置可选增强(翻译意图/修冲突) |
-| 复杂度 | 极高(学 Nix 语言门槛) | 低(写 TS 或选模板) |
-| 可复现 | 来自 Nix 语言求值 | 来自 lock(与前端无关) |
+| Package ecosystem | Homegrown (nixpkgs 80k+) | Consumes Debian + Nix |
+| Config language | Nix (niche DSL) | TypeScript (mainstream, sandboxed) |
+| Build system | Derivations (from source) | Consumes prebuilt packages directly |
+| AI role | None (nixai is external) | Built-in optional enhancement (translate intent / repair conflicts) |
+| Complexity | Very high (learning the Nix language) | Low (write TS or pick a template) |
+| Reproducibility | From Nix-language evaluation | From the lock (independent of the frontend) |
 
-Aevum 可以**消费 Nix 的产出**(`nix-fetch` 直接拉 nixpkgs 预编译包)而不需要用户学 Nix 语言。
-
----
-
-## 已验证能力
-
-| 场景 | 验证结果 |
-|------|----------|
-| 静态链接程序(busybox) | ✅ 直接可用 |
-| 动态链接程序(ripgrep) | ✅ 自动补全依赖闭包 |
-| Wayland 终端(foot) | ✅ 35 包闭包,WSLg 上运行 |
-| Wayland compositor(weston) | ✅ 250 包 GPU 栈,WSLg 弹窗 |
-| Nix 包(niri) | ✅ 242 包递归拉取,--version 成功 |
-| QEMU 引导 | ✅ 内核 → Aevum initramfs → shell |
-| 世代切换 | ✅ switch 后 PATH 自动可用 |
-| 配置漂移检测 | ✅ 同源未漂移 / 改源报漂移 |
+Aevum can **consume Nix's output** (`nix-fetch` pulls prebuilt nixpkgs packages) without requiring users to learn the Nix language.
 
 ---
 
-## 文档
+## Verified capabilities
 
-- [架构总览](docs/architecture/00-overview.md)
-- [模板系统](docs/templates/README.md)
-- [Nix 包源设计](docs/design/nix-source.md)
-- [变更日志](docs/CHANGELOG.md)(57 轮迭代记录)
-- [ADR](docs/architecture/adr/)(5 个架构决策记录)
-- [PoC](poc/)(7 个概念验证)
+| Scenario | Result |
+|----------|--------|
+| Statically-linked program (busybox) | ✅ works directly |
+| Dynamically-linked program (ripgrep) | ✅ dependency closure auto-completed |
+| Wayland terminal (foot) | ✅ 35-package closure, runs on WSLg |
+| Wayland compositor (weston) | ✅ 250-package GPU stack, window on WSLg |
+| Nix package (niri) | ✅ 242 packages fetched recursively, `--version` succeeds |
+| QEMU boot | ✅ kernel → Aevum initramfs → shell |
+| Generation switch | ✅ PATH usable immediately after switch |
+| Config drift detection | ✅ same source → no drift / changed source → drift reported |
+| AI conflict repair | ✅ 4 scenarios verified live; plans A/C/D all chosen correctly |
 
 ---
 
-## 许可证
+## Documentation
+
+- [Architecture overview](docs/architecture/00-overview.md)
+- [Template system](docs/templates/README.md)
+- [Nix package source design](docs/design/nix-source.md)
+- [Changelog](docs/CHANGELOG.md) (58 iterations recorded)
+- [ADRs](docs/architecture/adr/) (5 architecture decision records)
+- [PoCs](poc/) (7 proofs of concept)
+
+---
+
+## License
 
 Apache-2.0
