@@ -1,0 +1,14 @@
+[package]
+name = "aevum-intent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "aevum_intent"
+path = "src/lib.rs"
+
+[dependencies]
+aevum-solver.workspace = true
+thiserror.workspace = true

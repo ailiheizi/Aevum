@@ -1,0 +1,7 @@
+# 离线 vendored 构建:所有依赖从 vendor/ 读取,不触网(恢复可复现构建,第五十四轮)。
+# 原在线镜像配置见 config.toml.bak(回滚用)。
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"

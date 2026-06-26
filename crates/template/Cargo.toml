@@ -1,0 +1,15 @@
+[package]
+name = "aevum-template"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "aevum_template"
+path = "src/lib.rs"
+
+[dependencies]
+aevum-solver.workspace = true
+aevum-service-compiler.workspace = true
+thiserror.workspace = true

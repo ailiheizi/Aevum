@@ -1,0 +1,22 @@
+# minimal-desktop 模板:最小桌面环境蓝图(分节形态,见 docs/templates/01-template-model.md)
+[template]
+name = "minimal-desktop"
+title = "最小桌面"
+version = "1.0.0"
+extends = []
+
+[capability.coreutils]
+constraint = "*"
+layer_hint = "system"
+
+[capability.bash]
+constraint = "*"
+layer_hint = "system"
+
+[optional.file-manager]
+default = "true"
+id = "pcmanfm"
+
+[optional.browser]
+default = "false"
+id = "firefox-esr"

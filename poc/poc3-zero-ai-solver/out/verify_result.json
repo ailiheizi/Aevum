@@ -1,0 +1,68 @@
+{
+  "checks": [
+    {
+      "name": "determinism_same_input_3x",
+      "ids": [
+        "clo-52afecfcdbd94438",
+        "clo-52afecfcdbd94438",
+        "clo-52afecfcdbd94438"
+      ],
+      "pass": true
+    },
+    {
+      "name": "distinct_templates_distinct_ids",
+      "pass": true
+    },
+    {
+      "name": "override_exclude_changes_closure",
+      "base_id": "clo-a5a3147b85572ebf",
+      "excluded_id": "clo-7d87765b5a7650f7",
+      "base_count": 99,
+      "excluded_count": 80,
+      "pass": true
+    },
+    {
+      "name": "lock_replay_without_solving",
+      "original": "clo-52afecfcdbd94438",
+      "replayed": "clo-52afecfcdbd94438",
+      "pass": true
+    },
+    {
+      "name": "real_content_addressed_fingerprints",
+      "with_sha256": 52,
+      "total": 52,
+      "pass": true
+    }
+  ],
+  "templates": {
+    "dev-python": {
+      "closure_id": "clo-6a2b81c6a4a773fa",
+      "package_count": 40,
+      "unresolved": 0,
+      "virtual_resolved": 0,
+      "alt_chosen": 4
+    },
+    "web-server": {
+      "closure_id": "clo-a5a3147b85572ebf",
+      "package_count": 99,
+      "unresolved": 0,
+      "virtual_resolved": 1,
+      "alt_chosen": 5
+    },
+    "cli-tools": {
+      "closure_id": "clo-52afecfcdbd94438",
+      "package_count": 52,
+      "unresolved": 0,
+      "virtual_resolved": 0,
+      "alt_chosen": 0
+    },
+    "media": {
+      "closure_id": "clo-d5f9ae9b565516cc",
+      "package_count": 251,
+      "unresolved": 0,
+      "virtual_resolved": 0,
+      "alt_chosen": 11
+    }
+  },
+  "all_pass": true
+}

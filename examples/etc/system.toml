@@ -1,0 +1,11 @@
+# 阶段4c 系统配置声明(纯数据 TOML,经 etc-builder 编译为 /etc 基底)。
+# 基底是不可变世代内容(随世代回退);运行时与 overlayfs 可变上层合并。
+[system]
+hostname = "aevum-demo"
+locale = "C.UTF-8"
+timezone = "UTC"
+
+[files]
+# 任意 /etc 文件:相对 /etc 的路径(含 / 的须 quote)= 内容。
+motd = "Welcome to Aevum (阶段4c:/etc 由声明生成)\n"
+"aevum/release" = "Aevum bootable demo — gen-driven /etc base\n"

@@ -1,0 +1,15 @@
+[package]
+name = "aevum-config-ts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "aevum_config_ts"
+path = "src/lib.rs"
+
+[dependencies]
+aevum-solver.workspace = true
+boa_engine.workspace = true
+thiserror.workspace = true

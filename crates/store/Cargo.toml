@@ -1,0 +1,15 @@
+[package]
+name = "aevum-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "aevum_store"
+path = "src/lib.rs"
+
+[dependencies]
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true

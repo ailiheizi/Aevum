@@ -1,0 +1,8 @@
+
+ISOLINUX 6.04 6.04-pre1  Copyright (C) 1994-2015 H. Peter Anvin et al
+boot: 
+
+Welcome to Alpine Linux 3.21
+Kernel 6.12.13-0-virt on an x86_64 (/dev/ttyS0)
+
+localhost login: 

@@ -1,0 +1,15 @@
+[package]
+name = "aevum-closure-builder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "aevum_closure_builder"
+path = "src/lib.rs"
+
+[dependencies]
+aevum-elf.workspace = true
+aevum-solver.workspace = true
+thiserror.workspace = true

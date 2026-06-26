@@ -1,0 +1,29 @@
+{
+  "total_packages_in_index": 68755,
+  "packages_with_depends": 60333,
+  "total_dependency_atoms": 308807,
+  "by_category": {
+    "versioned_nonlib": 45562,
+    "lib_versioned": 128214,
+    "lib_soname": 35871,
+    "virtual_or_alt": 6464,
+    "non_lib": 92696
+  },
+  "rollup": {
+    "auto_lib_soname": 35871,
+    "semi_lib_versioned": 128214,
+    "manual_semantic": 144722
+  },
+  "pct": {
+    "auto_pct": 11.6,
+    "semi_pct": 41.5,
+    "manual_pct": 46.9
+  },
+  "package_level": {
+    "packages_with_deps": 60333,
+    "fully_auto_packages": 13443,
+    "fully_auto_pct": 22.3,
+    "packages_using_alternatives": 5359,
+    "alt_pct": 8.9
+  }
+}

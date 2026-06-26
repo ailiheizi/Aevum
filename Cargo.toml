@@ -1,0 +1,63 @@
+# Aevum workspace
+# AI-native、可复现、原子化的 Linux 用户态系统层 / 包管理器。
+# 七个 PoC 校正过的算法,在此落成第一版 Rust 实现。
+# 详见 docs/guides/01-rust-implementation-kickoff.md
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/elf",
+    "crates/store",
+    "crates/generation",
+    "crates/solver",
+    "crates/closure-builder",
+    "crates/intent",
+    "crates/config-ts",
+    "crates/template",
+    "crates/nix-source",
+    "crates/service-compiler",
+    "crates/etc-builder",
+    "crates/maintainer",
+    "crates/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.85"
+repository = "https://github.com/aevum/aevum"
+
+# 跨 crate 共享依赖版本,各 crate 用 `.workspace = true` 继承。
+[workspace.dependencies]
+# 错误处理
+anyhow = "1"
+thiserror = "2"
+# 哈希(内容寻址 store / closure_id)
+sha2 = "0.10"
+hex = "0.4"
+# ELF 解析(生产用库,PoC 手写仅为零依赖验证)
+goblin = "0.9"
+# 序列化(lock 文件 / 世代元数据)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# CLI
+clap = { version = "4", features = ["derive"] }
+# TS 意图前端的沙箱 JS 引擎(纯 Rust,无运行期外部依赖;ADR-0004)
+boa_engine = "0.21"
+# 内部 crate 互相引用
+aevum-elf = { path = "crates/elf" }
+aevum-store = { path = "crates/store" }
+aevum-generation = { path = "crates/generation" }
+aevum-solver = { path = "crates/solver" }
+aevum-closure-builder = { path = "crates/closure-builder" }
+aevum-intent = { path = "crates/intent" }
+aevum-config-ts = { path = "crates/config-ts" }
+aevum-template = { path = "crates/template" }
+aevum-nix-source = { path = "crates/nix-source" }
+aevum-service-compiler = { path = "crates/service-compiler" }
+aevum-etc-builder = { path = "crates/etc-builder" }
+aevum-maintainer = { path = "crates/maintainer" }
+
+[profile.release]
+lto = "thin"

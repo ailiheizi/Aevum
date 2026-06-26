@@ -1,0 +1,22 @@
+# dev-rust 模板:Rust 开发环境蓝图(extends minimal-desktop)
+[template]
+name = "dev-rust"
+title = "Rust 开发"
+version = "1.0.0"
+extends = ["minimal-desktop"]
+
+[capability.rustc]
+constraint = ">=1.75"
+layer_hint = "app"
+
+[capability.cargo]
+constraint = ">=1.75"
+layer_hint = "app"
+
+[capability.gcc]
+constraint = "*"
+layer_hint = "app"
+
+[optional.rust-analyzer]
+default = "true"
+id = "rust-analyzer"

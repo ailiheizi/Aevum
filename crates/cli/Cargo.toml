@@ -1,0 +1,32 @@
+[package]
+name = "aevum-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "aevum"
+path = "src/main.rs"
+
+[lib]
+name = "aevum_cli"
+path = "src/lib.rs"
+
+[dependencies]
+aevum-store.workspace = true
+aevum-generation.workspace = true
+aevum-solver.workspace = true
+aevum-closure-builder.workspace = true
+aevum-elf.workspace = true
+aevum-intent.workspace = true
+aevum-config-ts.workspace = true
+aevum-template.workspace = true
+aevum-nix-source.workspace = true
+aevum-service-compiler.workspace = true
+aevum-etc-builder.workspace = true
+aevum-maintainer.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+sha2.workspace = true
+hex.workspace = true

@@ -1,0 +1,14 @@
+[package]
+name = "aevum-generation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "aevum_generation"
+path = "src/lib.rs"
+
+[dependencies]
+aevum-store.workspace = true
+thiserror.workspace = true

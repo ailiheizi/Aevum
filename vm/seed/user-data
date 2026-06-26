@@ -1,0 +1,12 @@
+#cloud-config
+password: aevum
+chpasswd:
+  expire: false
+ssh_pwauth: true
+hostname: aevum-vm
+ssh_authorized_keys:
+  - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGxD5jPO+aM0LKQXIw7IXv33tyBfXCrQcdzwDsVnV5Y7 angelic@User
+packages:
+  - curl
+runcmd:
+  - echo "Aevum VM ready" > /etc/motd

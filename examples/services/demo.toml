@@ -1,0 +1,13 @@
+# 阶段4b demo 服务声明(纯数据 TOML,经引擎 service-compiler 编译为 s6 scandir 服务)。
+# 对应 4a 手写的 demo/run,现在改由声明生成,证明"TOML 声明 → 服务"链路。
+[service]
+name = "demo"
+type = "longrun"
+description = "Aevum 阶段4b:由 TOML 声明编译生成的 demo 服务"
+
+[run]
+# argv 数组(非 shell 字符串):每秒打印一次 tick。busybox sh -c 跑循环。
+argv = ["/bin/busybox", "sh", "-c", "n=0; while true; do n=$((n+1)); echo \"[demo-svc] 由 TOML 声明编译,tick=$n (pid $$)\"; /bin/busybox sleep 1; done"]
+
+[deps]
+after = ["network"]

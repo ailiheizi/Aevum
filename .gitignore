@@ -1,0 +1,37 @@
+# Rust 构建产物
+/target
+/crates/*/target
+
+# vendored 依赖(由 `cargo vendor vendor` 生成,体积大,不入版本控制)
+# 重新生成:在能联网的环境跑 `cargo vendor vendor`;
+# 当前 .cargo/config.toml 指向它以支持 WSL 离线编译(见 docs/CHANGELOG.md 第十一轮)。
+/vendor
+
+# WSL/Linux 侧独立 target
+*.rs.bk
+
+# Aevum 运行期状态(解包/store/世代/abi-bridge,由 prep 脚本与测试生成,可重建)
+/.aevum
+
+# VM 镜像与实验产物(大文件,不入库)
+/vm/*.qcow2
+/vm/*.img
+/vm/*.iso
+/vm/serial.log
+/vm/boot.log
+/vm/qemu-debug.log
+/vm/vmlinuz
+/vm/initramfs.cpio.gz
+/vm/aevum-vm-key
+/vm/aevum-vm-key.pub
+
+# Nix 参考源码(开发参考,不入库)
+/refs/
+
+# .cargo/config.toml.bak(离线 vendor 回滚备份)
+/.cargo/config.toml.bak
+
+# Claude Code / OMC 内部文件(不对外)
+CLAUDE.md
+.omc/
+.claude/
