@@ -622,7 +622,9 @@ fn main() -> anyhow::Result<()> {
                         return Ok(());
                     }
                     let gen_id = aevum_cli::next_generation_id(&layout);
-                    do_install(&layout, &action.packages, &[], aevum_cli::MIRROR_USTC, gen_id)?;
+                    // AI 选的包走 verify 门禁(ADR-0005:AI 不能自我放行,须独立复核)。
+                    // --yes 同时作为门禁的 confirm:放行版本回退类安全判据(用户已知情拍板)。
+                    do_install(&layout, &action.packages, &[], aevum_cli::MIRROR_USTC, gen_id, true, yes)?;
                 }
                 "remove" if !action.packages.is_empty() => {
                     println!("→ 意图: 移除 {:?}(用 `aevum remove` 执行)", action.packages);
@@ -842,7 +844,7 @@ fn main() -> anyhow::Result<()> {
             } else {
                 generation
             };
-            do_install(&layout, &packages, &only, &mirror, gen_id)?;
+            do_install(&layout, &packages, &only, &mirror, gen_id, false, false)?;
         }
         Command::ExportRootfs { package, bin, out } => {
             let bin_rel = bin.unwrap_or_else(|| format!("usr/bin/{package}"));
@@ -1356,6 +1358,8 @@ fn do_install(
     only: &[String],
     mirror: &str,
     gen_id: u64,
+    gated: bool,
+    confirm: bool,
 ) -> anyhow::Result<()> {
     let lock = aevum_cli::resolve(layout, packages, &packages[0])
         .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -1370,13 +1374,39 @@ fn do_install(
     };
     println!("将安装 {} 个包 → gen-{gen_id}", targets.len());
     println!("  镜像: {mirror}");
-    let report = aevum_cli::install(layout, &lock, mirror, only, gen_id)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    if gated {
+        // AI 选包:走 verify 门禁(ADR-0005)。propose 候选 → verify → 通过才激活。
+        let (report, outcome) =
+            aevum_cli::install_gated(layout, &lock, &packages[0], mirror, only, gen_id, confirm)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        if !outcome.activated {
+            match outcome.blocked_reason {
+                Some(aevum_cli::ActivateBlocked::HardFail) => {
+                    return Err(anyhow::anyhow!(
+                        "🛡 verify 门禁拒绝激活 gen-{gen_id}(完整性/闭合性硬失败)。候选世代已造但未激活,active 不动。"
+                    ));
+                }
+                Some(aevum_cli::ActivateBlocked::NeedsConfirm) => {
+                    return Err(anyhow::anyhow!(
+                        "🛡 verify 门禁:检出版本回退,需人工确认。用 `aevum ai --yes \"...\"` 或显式 `aevum install` 放行。候选 gen-{gen_id} 未激活。"
+                    ));
+                }
+                None => {}
+            }
+        }
+        println!("[install] 🛡 verify 门禁通过 → gen-{} 已激活({} 个 store 对象)", report.generation, report.store_objects);
+    } else {
+        // 人类显式敲包名:便捷直装(历史行为)。
+        let report = aevum_cli::install(layout, &lock, mirror, only, gen_id)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        println!("[install] gen-{} 已激活({} 个 store 对象)", report.generation, report.store_objects);
+    }
+
     // 记录该世代由哪个 lock 构建(供 list/remove 认 active 世代,而非瞎猜最新 lock)。
     if let Err(e) = aevum_cli::record_generation_lock(layout, gen_id, &packages[0]) {
         println!("  ⚠ 记录世代 lock 指针失败: {e}");
     }
-    println!("[install] gen-{} 已激活({} 个 store 对象)", report.generation, report.store_objects);
     match aevum_cli::refresh_profile(layout) {
         Ok(n) => println!("  profile/bin: {n} 个可执行文件已就绪"),
         Err(e) => println!("  ⚠ profile 刷新: {e}"),
@@ -1386,7 +1416,15 @@ fn do_install(
 }
 
 #[cfg(not(unix))]
-fn do_install(_l: &aevum_cli::Layout, _p: &[String], _o: &[String], _m: &str, _g: u64) -> anyhow::Result<()> {
+fn do_install(
+    _l: &aevum_cli::Layout,
+    _p: &[String],
+    _o: &[String],
+    _m: &str,
+    _g: u64,
+    _gated: bool,
+    _confirm: bool,
+) -> anyhow::Result<()> {
     Err(anyhow::anyhow!("install 需要 unix"))
 }
 

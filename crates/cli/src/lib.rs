@@ -1077,6 +1077,41 @@ pub fn install(
     Ok(report)
 }
 
+/// **门禁安装**(ADR-0005):propose 造候选世代 → **verify 门禁** → 通过才 set_active。
+///
+/// 与 [`install`] 的区别:install 是人类显式敲包名的便捷路径,直接激活;
+/// 本函数走 verify 闸门,用于 **AI 参与选包**的场景——AI 产出的意图必须由独立的
+/// verify machine 复核(完整性/闭合/版本回退),AI 不能自我放行(ADR-0003 边界、ADR-0005)。
+///
+/// 返回 `(InstallReport, ActivateOutcome)`:候选已造好(report),是否真激活看 outcome。
+/// 硬性失败或需确认未放行时 `outcome.activated=false`,候选世代留盘但 active 不动。
+/// `confirm=true` 仅放行版本回退类安全判据,永不放行完整性/闭合硬失败。unix 专有。
+#[cfg(unix)]
+pub fn install_gated(
+    layout: &Layout,
+    lock: &aevum_solver::Lock,
+    lock_name: &str,
+    mirror: &str,
+    only: &[String],
+    gen_id: u64,
+    confirm: bool,
+) -> Result<(InstallReport, ActivateOutcome), Box<dyn std::error::Error>> {
+    // 1. propose:造候选世代,但**不**激活(active 指针不动)。
+    let report = propose_generation(layout, lock, mirror, only, gen_id)?;
+    // 2. 当前 active 世代的 lock(供门禁做版本回退比较;首装为 None)。
+    let active = active_lock_name(layout)?;
+    // 3. verify 门禁 → 通过才 set_active(+写 verified 审计标记)。
+    let outcome = activate_verified(
+        layout,
+        lock_name,
+        gen_id,
+        active.as_deref(),
+        None, // foundation manifest:AI 便捷装包场景不强制 foundation 判据
+        confirm,
+    )?;
+    Ok((report, outcome))
+}
+
 #[cfg(not(unix))]
 pub fn install(
     _layout: &Layout,
