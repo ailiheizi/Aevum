@@ -5,7 +5,7 @@
 
 #![cfg(unix)]
 
-use aevum_nix_source::{NixCacheClient, NarInfo};
+use aevum_nix_source::NixCacheClient;
 use std::path::PathBuf;
 
 const MIRROR: &str = "https://mirrors.ustc.edu.cn/nix-channels/store";
@@ -43,12 +43,11 @@ fn fetch_and_unpack_real() {
     assert!(dest.exists(), "解包目录应存在: {}", dest.display());
     assert!(dest.join("bin/bash").exists(), "bash 二进制应在 bin/bash");
 
-    // 验证可执行
-    let output = std::process::Command::new(dest.join("bin/bash"))
+    // 验证可执行(只确认能 spawn;Nix bash 的 interpreter 指向 /nix/store/glibc,
+    // 真跑 --version 可能因 interpreter 不在而失败——文件存在 + ELF 大小达标即够)。
+    let _ = std::process::Command::new(dest.join("bin/bash"))
         .args(["--version"])
         .output();
-    // 可能因 interpreter 不在而失败(正常——Nix bash 的 interpreter 指向 /nix/store/glibc)
-    // 但文件存在且有 ELF magic 就够了
     let meta = std::fs::metadata(dest.join("bin/bash")).unwrap();
     assert!(meta.len() > 100_000, "bash 应大于 100KB: {}B", meta.len());
     println!("fetch_one OK: {} → {} ({}B)", info.name(), dest.display(), meta.len());

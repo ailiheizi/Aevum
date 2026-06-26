@@ -87,6 +87,40 @@ impl NarInfo {
             None => name,
         }
     }
+
+    /// 安全提取落盘用的 ref 名(`<hash>-<name>`),拒绝路径穿越。
+    ///
+    /// **安全关键**:`store_path` 来自下载的 narinfo(镜像/服务器控制),绝不可信。
+    /// 天真地 `strip_prefix("/nix/store/").unwrap_or(&store_path)` 再 `store_dir.join(..)`
+    /// 会被恶意 narinfo 利用:`StorePath: /etc/cron.d/evil`(无前缀)在 Unix 下经
+    /// `Path::join` 丢弃 base 直接写绝对路径;`StorePath: /nix/store/../../etc/x` 经 `..` 上跳。
+    /// 二者都能把包内容(含可执行位/setuid/symlink)写到任意可写路径 → 任意文件写。
+    ///
+    /// 校验:必须 `/nix/store/` 前缀;剩余段不得含路径分隔符/空字节、不得为 `.`/`..`、
+    /// 不得为空;且须形如 `<32 字符 hash>-<name>`。通过后 ref 名保证是 store_dir 的直接子项。
+    pub fn validated_ref_name(&self) -> Result<&str, NarInfoError> {
+        let rest = self.store_path.strip_prefix("/nix/store/").ok_or_else(|| {
+            NarInfoError::Format(format!("StorePath 不以 /nix/store/ 开头(拒绝): {}", self.store_path))
+        })?;
+        if rest.is_empty()
+            || rest == "."
+            || rest == ".."
+            || rest.contains('/')
+            || rest.contains('\\')
+            || rest.contains('\0')
+        {
+            return Err(NarInfoError::Format(format!(
+                "StorePath 含非法 ref 名(疑路径穿越,拒绝): {rest:?}"
+            )));
+        }
+        // 形如 <hash>-<name>:至少 34 字符,第 33 位(下标 32)是 '-'。
+        if rest.len() < 34 || rest.as_bytes()[32] != b'-' {
+            return Err(NarInfoError::Format(format!(
+                "StorePath ref 名格式非法(应为 <32 字符 hash>-<name>): {rest:?}"
+            )));
+        }
+        Ok(rest)
+    }
 }
 
 #[cfg(test)]
@@ -127,5 +161,48 @@ Sig: cache.nixos.org-1:A280XsxdSgHu2NO8KKju5Wvf7a1JgtH0Yp5c6Btqc4Rnvd/lA1Dpi6MEw
     fn missing_store_path_errors() {
         let bad = "URL: nar/foo.nar.xz\n";
         assert!(matches!(NarInfo::parse(bad), Err(NarInfoError::MissingField(_))));
+    }
+
+    #[test]
+    fn validated_ref_name_accepts_legit() {
+        let info = NarInfo::parse(SAMPLE).unwrap();
+        assert_eq!(
+            info.validated_ref_name().unwrap(),
+            "f4y36sn7m173qvdija8a1p6v81py66ns-niri-26.04"
+        );
+    }
+
+    #[test]
+    fn validated_ref_name_rejects_path_traversal() {
+        // 构造恶意 narinfo:各种路径穿越/绝对路径逃逸,必须全被拒。
+        let attacks = [
+            "/etc/cron.d/evil",                       // 无 /nix/store/ 前缀 → 绝对路径逃逸
+            "/nix/store/../../etc/passwd",            // .. 上跳
+            "/nix/store/",                            // 空 ref
+            "/nix/store/.",                           // 当前目录
+            "/nix/store/..",                          // 父目录
+            "/nix/store/sub/dir-name",                // 含分隔符 → 非直接子项
+            "relative-path",                          // 完全无前缀
+        ];
+        for sp in attacks {
+            let info = NarInfo {
+                store_path: sp.to_string(),
+                url: "nar/x.nar.xz".into(),
+                ..Default::default()
+            };
+            assert!(
+                info.validated_ref_name().is_err(),
+                "路径穿越未被拒绝: {sp:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validated_ref_name_rejects_bad_shape() {
+        // 有前缀但不形如 <32 hash>-<name>。
+        for sp in ["/nix/store/short", "/nix/store/f4y36sn7m173qvdija8a1p6v81py66nsXniri"] {
+            let info = NarInfo { store_path: sp.to_string(), url: "u".into(), ..Default::default() };
+            assert!(info.validated_ref_name().is_err(), "坏格式未被拒: {sp:?}");
+        }
     }
 }

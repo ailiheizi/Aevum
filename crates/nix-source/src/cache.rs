@@ -68,8 +68,10 @@ impl NixCacheClient {
     /// 管道:`curl -sL <nar_url> | xz -d` → NAR reader → unpack 到 `store_dir/<ref>`。
     /// 如果目标目录已存在则跳过(幂等)。
     pub fn fetch_and_unpack(&self, info: &NarInfo) -> Result<usize, CacheError> {
-        // 目标路径:store_dir/<hash>-<name>
-        let ref_name = info.store_path.strip_prefix("/nix/store/").unwrap_or(&info.store_path);
+        // 目标路径:store_dir/<hash>-<name>。
+        // 安全关键:ref 名经 validated_ref_name 校验,拒绝路径穿越/绝对路径逃逸
+        // (store_path 来自下载的 narinfo,不可信)。
+        let ref_name = info.validated_ref_name()?;
         let dest = self.store_dir.join(ref_name);
         if dest.exists() {
             return Ok(0); // 已存在,跳过
@@ -165,15 +167,37 @@ impl NixCacheClient {
     /// 优先选不带 `-doc`/`-dev`/`-man`/`-info` 后缀的精确匹配。
     pub fn resolve_package(channel_url: &str, name: &str) -> Result<String, CacheError> {
         let url = format!("{}/store-paths.xz", channel_url);
-        let output = Command::new("sh")
-            .args(["-c", &format!("curl -sL '{}' | xz -d | grep -F -- '-{}'", url, name)])
+        // 安全关键:不经 `sh -c`。旧实现把 name/url 插进单引号 shell 串,
+        // 一个单引号即可逃逸命令(`x'; rm -rf ~; echo '`)→ 注入。
+        // 这里用 argv 形式 spawn curl,管道接 xz,匹配在 Rust 里做;name 仅作数据。
+        let mut curl = Command::new("curl")
+            .args(["-sL", "--fail", &url])
+            .stdout(Stdio::piped())
+            .spawn()
+            .map_err(|e| CacheError::NotFound(format!("curl spawn 失败: {e}")))?;
+        let curl_stdout = curl.stdout.take().unwrap();
+        let xz = Command::new("xz")
+            .args(["-d"])
+            .stdin(curl_stdout)
+            .stdout(Stdio::piped())
             .output()
-            .map_err(|e| CacheError::NotFound(format!("resolve 执行失败: {e}")))?;
+            .map_err(|e| CacheError::NotFound(format!("xz 执行失败: {e}")))?;
+        let _ = curl.wait();
+        if !xz.status.success() {
+            return Err(CacheError::NotFound(format!(
+                "下载/解压 store-paths 失败({url})"
+            )));
+        }
 
-        let text = String::from_utf8_lossy(&output.stdout);
+        let text = String::from_utf8_lossy(&xz.stdout);
+        let needle = format!("-{name}");
         let mut candidates: Vec<(String, String)> = Vec::new(); // (hash, full_pkg_part)
 
         for line in text.lines() {
+            // 原 `grep -F -- '-{name}'` 的等价过滤:行须含 `-<name>`。
+            if !line.contains(&needle) {
+                continue;
+            }
             let store_name = line.strip_prefix("/nix/store/").unwrap_or(line).trim();
             if store_name.is_empty() {
                 continue;
