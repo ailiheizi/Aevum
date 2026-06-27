@@ -213,55 +213,86 @@ fn call_claude(config: &AiConfig, system_prompt: &str, user_message: &str) -> Re
     extract_claude_content(&resp)
 }
 
+/// 安全截断不可信文本到最多 `n` 个**字符**(P1-15)。
+///
+/// 旧代码用 `&resp[..resp.len().min(200)]` 做诊断切片,第 200 字节若落在多字节
+/// UTF-8 中间(中文错误体极可能)会 panic。这发生在响应畸形的失败路径,本该返 Err
+/// 让 caller 优雅降级(ADR-0005),却 abort 进程 —— 攻击者可控网络输入触发的 DoS。
+/// 按字符边界截断,永不 panic。
+pub fn truncate_chars(s: &str, n: usize) -> String {
+    s.chars().take(n).collect()
+}
+
+/// 从 JSON 文本提取 `key` 之后的字符串值(逐字符,正确处理转义,含 `\uXXXX`)。
+///
+/// 这是**唯一**的 JSON 字符串提取实现(P1-14:此前 ai_client 用顺序相关、错误的
+/// `.replace()` 链,lib.rs 用另一套都不解 `\uXXXX`;live AI 走的是错的那套)。
+/// `key` 形如 `"content":"` 或 `"text":"`。逐字符扫描到下一个**未转义**引号,
+/// 沿途解 `\n \t \r \" \\ \/ \b \f` 与 `\uXXXX`(4 位十六进制 → 字符,
+/// 工作语言是中文,unicode 转义的 CJK 必须正确解码而非留成字面 `u00e9`)。
+pub fn extract_json_string(resp: &str, key: &str) -> Result<String, String> {
+    let pos = resp
+        .find(key)
+        .ok_or_else(|| format!("AI 响应无 {key} 字段: {}", truncate_chars(resp, 200)))?;
+    let rest = &resp[pos + key.len()..];
+    let mut out = String::new();
+    let mut chars = rest.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('r') => out.push('\r'),
+                Some('"') => out.push('"'),
+                Some('\\') => out.push('\\'),
+                Some('/') => out.push('/'),
+                Some('b') => out.push('\u{0008}'),
+                Some('f') => out.push('\u{000C}'),
+                Some('u') => {
+                    // 取 4 位十六进制 → char。非法/截断则跳过(尽力而为,不 panic)。
+                    let hex: String = chars.by_ref().take(4).collect();
+                    if let Some(ch) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                        out.push(ch);
+                    }
+                }
+                Some(other) => out.push(other),
+                None => break,
+            },
+            '"' => break, // 未转义引号 = 字符串结束
+            other => out.push(other),
+        }
+    }
+    Ok(out)
+}
+
 /// 从 OpenAI 兼容响应提取 content。
 fn extract_openai_content(resp: &str) -> Result<String, String> {
-    // 极简提取:找 "content":" 后的字符串(不引 serde_json)
-    let marker = r#""content":""#;
-    let Some(pos) = resp.find(marker) else {
-        return Err(format!("AI 响应无 content 字段: {}", &resp[..resp.len().min(200)]));
-    };
-    let start = pos + marker.len();
-    let rest = &resp[start..];
-    // 找配对的 " (处理转义)
-    let mut end = 0;
-    let bytes = rest.as_bytes();
-    while end < bytes.len() {
-        if bytes[end] == b'"' && (end == 0 || bytes[end - 1] != b'\\') {
-            break;
-        }
-        end += 1;
-    }
-    let content = &rest[..end];
-    Ok(content.replace("\\n", "\n").replace("\\\"", "\"").replace("\\\\", "\\"))
+    extract_json_string(resp, r#""content":""#)
 }
 
 /// 从 Claude 响应提取 text。
 fn extract_claude_content(resp: &str) -> Result<String, String> {
-    let marker = r#""text":""#;
-    let Some(pos) = resp.find(marker) else {
-        return Err(format!("Claude 响应无 text 字段: {}", &resp[..resp.len().min(200)]));
-    };
-    let start = pos + marker.len();
-    let rest = &resp[start..];
-    let mut end = 0;
-    let bytes = rest.as_bytes();
-    while end < bytes.len() {
-        if bytes[end] == b'"' && (end == 0 || bytes[end - 1] != b'\\') {
-            break;
-        }
-        end += 1;
-    }
-    let content = &rest[..end];
-    Ok(content.replace("\\n", "\n").replace("\\\"", "\"").replace("\\\\", "\\"))
+    extract_json_string(resp, r#""text":""#)
 }
 
-/// JSON 字符串转义(最小:处理 \、"、\n、\r、\t)。
-fn json_escape(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t")
+/// JSON 字符串转义(P1-16:所有 `<0x20` 控制字符转 `\uXXXX`,否则产出非法 JSON)。
+///
+/// 旧版只处理 `\ " \n \r \t`,其余 C0 控制字节(用户输入/聊天历史里的粘贴产物、
+/// 终端转义)原样进 `"content":"..."`,RFC 8259 禁止 → API parse error 拒绝整个请求。
+pub fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -299,6 +330,50 @@ mod tests {
     #[test]
     fn json_escape_works() {
         assert_eq!(json_escape("a\"b\nc"), r#"a\"b\nc"#);
+    }
+
+    #[test]
+    fn json_escape_handles_control_chars() {
+        // P1-16: control chars <0x20 must become \uXXXX or the JSON is invalid.
+        let s = "a\u{0001}b\u{001f}c";
+        assert_eq!(json_escape(s), "a\\u0001b\\u001fc");
+        assert_eq!(json_escape("\t"), "\\t");
+    }
+
+    #[test]
+    fn extract_decodes_unicode_escape() {
+        // P1-14: \uXXXX must decode (CJK working language; APIs emit \uXXXX).
+        let resp = "{\"content\":\"\\u4f60\\u597d world\"}";
+        assert_eq!(extract_openai_content(resp).unwrap(), "\u{4f60}\u{597d} world");
+    }
+
+    #[test]
+    fn extract_handles_trailing_backslash_in_content() {
+        // P1-13:内容里合法的转义反斜杠不应吞掉闭引号。
+        // JSON 源:"content":"path\\" —— 值是 `path\`,随后是闭引号 + 下游字段。
+        let resp = r#"{"content":"path\\","role":"assistant"}"#;
+        let got = extract_openai_content(resp).unwrap();
+        assert_eq!(got, "path\\", "应在闭引号处停止,值为 path\\(不吞下游字段)");
+        assert!(!got.contains("role"), "不应吃进下游 role 字段");
+    }
+
+    #[test]
+    fn truncate_chars_no_panic_on_multibyte() {
+        // P1-15:多字节边界截断不 panic(旧 &s[..n] 在此 DoS)。
+        let s = "错误信息".repeat(100); // 全多字节
+        let t = truncate_chars(&s, 200);
+        assert!(t.chars().count() <= 200);
+        // 长 ASCII、空串、短串都安全。
+        assert_eq!(truncate_chars("abc", 200), "abc");
+        assert_eq!(truncate_chars("", 200), "");
+    }
+
+    #[test]
+    fn extract_missing_field_truncates_safely() {
+        // 失败路径:无 content 字段且响应是长多字节文本 → 返 Err 而非 panic(ADR-0005)。
+        let resp = "服务器错误".repeat(100);
+        let r = extract_openai_content(&resp);
+        assert!(r.is_err(), "无 content 字段应返 Err");
     }
 
     #[test]

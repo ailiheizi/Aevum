@@ -272,53 +272,18 @@ fn call_deepseek(api_key: &str, model: &str, prompt: &str) -> Result<String, Int
     extract_content(&resp)
 }
 
-/// 从 DeepSeek JSON 响应提取 `choices[0].message.content`(极简,无 JSON 依赖)。
+/// 从 DeepSeek JSON 响应提取 `choices[0].message.content`。
+/// 收敛到 [`ai_client::extract_json_string`](P1-14:此前 lib.rs 与 ai_client 各有一套
+/// 分歧实现,都不解 `\uXXXX`;现统一到那个正确的逐字符 unescaper)。
 fn extract_content(resp: &str) -> Result<String, IntentError> {
-    // 找 "content":" 之后到下一个未转义引号。
-    let key = "\"content\":\"";
-    let start = resp
-        .find(key)
-        .ok_or_else(|| IntentError::TranslateFailed(format!("响应无 content 字段: {resp}")))?
-        + key.len();
-    let rest = &resp[start..];
-    let mut out = String::new();
-    let mut chars = rest.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '\\' => {
-                // 处理转义:\n \t \" \\ \/ 等
-                if let Some(n) = chars.next() {
-                    match n {
-                        'n' => out.push('\n'),
-                        't' => out.push('\t'),
-                        '"' => out.push('"'),
-                        '\\' => out.push('\\'),
-                        '/' => out.push('/'),
-                        other => out.push(other),
-                    }
-                }
-            }
-            '"' => break, // 未转义引号 = content 结束
-            other => out.push(other),
-        }
-    }
-    Ok(out)
+    ai_client::extract_json_string(resp, "\"content\":\"")
+        .map_err(IntentError::TranslateFailed)
 }
 
 /// 最小 JSON 字符串转义(用于请求体的 prompt)。
+/// 收敛到 [`ai_client::json_escape`](P1-16:含 `<0x20` 控制字符转义)。
 fn json_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\t' => out.push_str("\\t"),
-            '\r' => out.push_str("\\r"),
-            other => out.push(other),
-        }
-    }
-    out
+    ai_client::json_escape(s)
 }
 
 #[cfg(test)]
