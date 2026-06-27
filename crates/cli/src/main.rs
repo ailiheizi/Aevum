@@ -562,18 +562,50 @@ fn main() -> anyhow::Result<()> {
             // 下载 Packages.gz → 解压 → 写到 $AEVUM_ROOT/index/Packages
             let url = format!("{}/dists/{}/main/binary-{}/Packages.gz", mirror, dist, arch);
             println!("[update] 从 {url} 更新索引...");
-            let index_dir = layout.index_file().parent().unwrap().to_path_buf();
+            let index_path = layout.index_file();
+            let index_dir = index_path.parent().unwrap().to_path_buf();
             std::fs::create_dir_all(&index_dir)?;
-            let output = std::process::Command::new("sh")
-                .args(["-c", &format!("curl -sL '{}' | gunzip > '{}'", url, layout.index_file().display())])
-                .output()
-                .map_err(|e| anyhow::anyhow!("curl/gunzip 失败: {e}"))?;
-            if !output.status.success() {
-                let err = String::from_utf8_lossy(&output.stderr);
-                return Err(anyhow::anyhow!("更新索引失败: {err}"));
+
+            // 安全/健壮(P1-3):不经 `sh -c "curl | gunzip > index"`。
+            // 旧实现两个坑:(1) 管道退出码只看 gunzip,curl 失败(404/断网)被吞;
+            // (2) `>` 先把正式索引截断成空文件,再发现下载失败 → 索引已毁。
+            // 这里:argv 形式 spawn curl(--fail)| gunzip → 写**临时文件**,
+            // 两端都成功且产出非空才原子 rename 覆盖正式索引;任一步失败保留旧索引。
+            let tmp_path = index_dir.join(format!("Packages.tmp.{}", std::process::id()));
+            let tmp = std::fs::File::create(&tmp_path)
+                .map_err(|e| anyhow::anyhow!("建临时索引失败: {e}"))?;
+
+            let mut curl = std::process::Command::new("curl")
+                .args(["-sL", "--fail", &url])
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| anyhow::anyhow!("curl spawn 失败: {e}"))?;
+            let curl_out = curl.stdout.take().unwrap();
+            let gunzip_status = std::process::Command::new("gunzip")
+                .stdin(curl_out)
+                .stdout(tmp)
+                .status()
+                .map_err(|e| anyhow::anyhow!("gunzip 执行失败: {e}"))?;
+            let curl_status = curl.wait().map_err(|e| anyhow::anyhow!("curl wait 失败: {e}"))?;
+
+            let fail = |reason: String| -> anyhow::Error {
+                let _ = std::fs::remove_file(&tmp_path); // 失败不留半截临时文件
+                anyhow::anyhow!("更新索引失败({reason});旧索引保留未动")
+            };
+            if !curl_status.success() {
+                return Err(fail(format!("curl 退出码 {curl_status}(镜像不可达/404?)")));
             }
-            let size = std::fs::metadata(layout.index_file())?.len();
-            println!("  ✓ 索引已更新: {} ({:.1} MB)", layout.index_file().display(), size as f64 / 1_048_576.0);
+            if !gunzip_status.success() {
+                return Err(fail(format!("gunzip 退出码 {gunzip_status}(响应非 gzip?)")));
+            }
+            let tmp_size = std::fs::metadata(&tmp_path).map(|m| m.len()).unwrap_or(0);
+            if tmp_size == 0 {
+                return Err(fail("解压后索引为空".into()));
+            }
+            // 原子替换:同目录 rename(POSIX 原子),旧索引到此刻才被覆盖。
+            std::fs::rename(&tmp_path, &index_path)
+                .map_err(|e| anyhow::anyhow!("替换索引失败: {e}(临时文件 {})", tmp_path.display()))?;
+            println!("  ✓ 索引已更新: {} ({:.1} MB)", index_path.display(), tmp_size as f64 / 1_048_576.0);
         }
         Command::Ai { message, reset, yes } => {
             use aevum_intent::ai_client::{AiConfig, ChatHistory};
