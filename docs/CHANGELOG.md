@@ -4,6 +4,46 @@
 
 ---
 
+## 2026-06-27(六)—— P1 批次:CI 上线 + 健壮性/可用性修复
+
+承接 P0 全清,本轮做 P1 高价值项。**最大成果:CI 第一次真跑 unix 测试**。
+
+### P1-1 GitHub Actions CI(ubuntu 真跑 unix 测试)
+
+- 全仓此前零 CI:所有 `#[cfg(unix)]` 安全测试(setuid/symlink/原子切换/dlopen 闭包)在作者的 Windows 机上被 `cargo test` 静默跳过 —— unix 回归可绿着合入。
+- 加 `.github/workflows/ci.yml`:ubuntu-latest、钉 Rust 1.88、装 binutils/xz,跑 `cargo build + test --workspace --locked`(阻断门);fmt+clippy 为 advisory(`continue-on-error`,待格式校准后转阻断)。
+- **上线即抓到 2 个真问题**:(1) 我自己写的 `active_lock_pointer` 测试依赖 mtime tie-break,在快速 ext4 上 flaky(Windows 计时器较粗才偶过)→ 删掉非契约的 mtime 断言;(2) `boa_engine` 实际要 rustc 1.88,而 `rust-version` 谎称 1.85 → 修正 MSRV。迭代 3 次后 build-test 稳定绿。
+
+### P1-2 clean-clone / CI 编译(vendor config)
+
+- 提交的 `.cargo/config.toml` 强制走被 gitignore 的 `vendor/`,任何 clean clone / CI 直接编译失败。
+- 改:untrack `.cargo/config.toml`(本地保留,作者离线 WSL 构建不受影响)+ gitignore;提交 `.cargo/config.offline.toml` 作 opt-in 模板;clean clone 默认走 crates.io。
+
+### P1-3 `aevum update` 不再毁索引
+
+- 旧 `sh -c "curl | gunzip > index"`:管道退出码只看 gunzip(curl 失败被吞),`>` 在下载失败前已把索引截断成空。
+- 改:argv 形式 curl `--fail` | gunzip → 临时文件,两端成功且非空才原子 rename。e2e:404 镜像 → 旧索引完好保留。
+
+### P1-4 `aevum init`(修开箱即崩)
+
+- README quick-start 让用户 `update` 后立刻 `source env.sh`,但 env.sh 只在首装后才写 → 首次 source `No such file or directory`。
+- 加 `aevum init [--update]`:建 root/profile/{bin,lib}/locks/generations + 写引导 env.sh(首装前可 source)。README 以它开篇。e2e 验证 init 后立刻 source 成功。
+
+### P1-6 NAR 中断恢复(原子提交)
+
+- `fetch_and_unpack` 原地解进 dest,仅 xz 非零才清理。SIGKILL/断电/磁盘满 留半成品 dest,下次 `exists()` 当完整 → 损坏对象入世代。
+- 改:解进 `.tmp-<pid>-<ref>`,xz 成功 + NarHash 校验通过才原子 rename 到 dest;dest 只在提交点出现且必完整;残留临时目录进函数即清。e2e:真拉 ripgrep,dest 出现、零残留临时目录。
+
+### 其它
+
+- 修正 workspace `repository` URL(`aevum/aevum` → `ailiheizi/Aevum`)。
+
+### 仍待(P1 余项,见 AUDIT-ROADMAP.md)
+
+- P1-5 并发锁(flock)、P1-7 make_generation 原地构建中断、fmt/clippy 转阻断、P0-2 签名半边(需 vendor ed25519)。
+
+---
+
 ## 2026-06-26(五)補2 —— P0-2 NAR 完整性校验(零新依赖,真包 e2e 验证)
 
 闭合上一轮"未决"里 P0-2 的**完整性**半边:NAR 下载现在校验内容哈希。修复前 `curl|xz|unpack` 无条件信任镜像字节,`NarHash`/`FileHash` 解析了却从不用——传输损坏 / 中间人 / 镜像投毒全检测不到。
