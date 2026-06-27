@@ -119,6 +119,8 @@ cargo build --release -p aevum-cli
 
 > Windows 上请在 WSL2 里编译——NTFS 不支持 Aevum 依赖的 symlink。
 
+> **离线编译**:默认从 crates.io 拉依赖。要离线/气隙编译,先联网跑一次 `cargo vendor vendor`,再 `cp .cargo/config.offline.toml .cargo/config.toml`。生效的 `.cargo/config.toml` 已被 gitignore,绝不破坏 clean clone 和 CI。
+
 ### 初始化
 
 ```bash

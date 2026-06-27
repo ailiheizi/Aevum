@@ -3,8 +3,8 @@
 /crates/*/target
 
 # vendored 依赖(由 `cargo vendor vendor` 生成,体积大,不入版本控制)
-# 重新生成:在能联网的环境跑 `cargo vendor vendor`;
-# 当前 .cargo/config.toml 指向它以支持 WSL 离线编译(见 docs/CHANGELOG.md 第十一轮)。
+# 重新生成:在能联网的环境跑 `cargo vendor vendor`。
+# 离线构建按需启用:`cp .cargo/config.offline.toml .cargo/config.toml`(见该文件注释)。
 /vendor
 
 # WSL/Linux 侧独立 target
@@ -28,7 +28,10 @@
 # Nix 参考源码(开发参考,不入库)
 /refs/
 
-# .cargo/config.toml.bak(离线 vendor 回滚备份)
+# .cargo/config.toml:本地构建配置(离线时 = config.offline.toml 的副本)。
+# 不入库——committed 它会强制 vendor/ 致 clean clone/CI 编译失败(P1-2)。
+# 在线构建模板见提交的 .cargo/config.offline.toml。
+/.cargo/config.toml
 /.cargo/config.toml.bak
 
 # Claude Code / OMC 内部文件(不对外)

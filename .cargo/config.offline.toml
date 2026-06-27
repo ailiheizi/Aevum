@@ -1,0 +1,18 @@
+# 离线 vendored 构建配置(**opt-in**,默认不生效)。
+#
+# 为什么不直接叫 config.toml:committed 的 config.toml 会强制所有依赖走 vendor/,
+# 而 vendor/ 被 .gitignore(体积大)。于是 clean clone / CI 里 vendor/ 不存在 →
+# `cargo build` 直接硬报错(P1-2)。所以默认走 crates.io(在线),离线按需启用本文件。
+#
+# 启用离线构建(作者的 WSL 工作流):
+#   1. 一次性在能联网处生成 vendor 树:cargo vendor vendor
+#   2. cp .cargo/config.offline.toml .cargo/config.toml
+#   (.cargo/config.toml 已被 gitignore,不会再污染版本控制)
+#
+# 回到在线构建:rm .cargo/config.toml(回退到默认 crates.io)。
+
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"

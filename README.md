@@ -119,6 +119,8 @@ cargo build --release -p aevum-cli
 
 > On Windows, build inside WSL2 — NTFS does not support the symlinks Aevum relies on.
 
+> **Offline builds:** the default build fetches dependencies from crates.io. To build air-gapped, run `cargo vendor vendor` once while online, then `cp .cargo/config.offline.toml .cargo/config.toml`. The active `.cargo/config.toml` is gitignored so it never breaks clean clones or CI.
+
 ### Initialize
 
 ```bash
