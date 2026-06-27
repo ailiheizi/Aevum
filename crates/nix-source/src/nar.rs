@@ -266,4 +266,121 @@ mod tests {
         let dest = std::env::temp_dir().join("nar-bad-magic");
         assert!(matches!(unpack(&mut Cursor::new(buf), &dest), Err(NarError::Format(_))));
     }
+
+    // ── P1-9:NAR 摄入来自不可信镜像,补 symlink 分支 + 路径穿越防御 + 边界的测试 ──
+
+    /// 构造一个 symlink 节点 NAR(target 任意)。
+    fn make_nar_symlink(target: &str) -> Vec<u8> {
+        let mut buf = Vec::new();
+        write_str(&mut buf, "nix-archive-1");
+        write_str(&mut buf, "(");
+        write_str(&mut buf, "type");
+        write_str(&mut buf, "symlink");
+        write_str(&mut buf, "target");
+        write_str(&mut buf, target);
+        write_str(&mut buf, ")");
+        buf
+    }
+
+    /// 构造一个含**单个具名 entry**(空目录子节点)的 directory NAR,entry 名可控(用于穿越测试)。
+    fn make_nar_dir_with_entry(entry_name: &str) -> Vec<u8> {
+        let mut buf = Vec::new();
+        write_str(&mut buf, "nix-archive-1");
+        write_str(&mut buf, "(");
+        write_str(&mut buf, "type");
+        write_str(&mut buf, "directory");
+        write_str(&mut buf, "entry");
+        write_str(&mut buf, "(");
+        write_str(&mut buf, "name");
+        write_str(&mut buf, entry_name);
+        write_str(&mut buf, "node");
+        // 子节点:空目录(最简合法节点)。
+        write_str(&mut buf, "(");
+        write_str(&mut buf, "type");
+        write_str(&mut buf, "directory");
+        write_str(&mut buf, ")");
+        write_str(&mut buf, ")"); // end entry
+        write_str(&mut buf, ")"); // end directory
+        buf
+    }
+
+    #[test]
+    fn unpack_symlink_node_preserved() {
+        // 几乎每个真实 Nix 包都有 symlink 节点,此前完全无单测。
+        let nar = make_nar_symlink("libfoo.so.1.2.3");
+        let dest = std::env::temp_dir().join(format!("nar-symlink-{}", std::process::id()));
+        let _ = fs::remove_file(&dest);
+        let count = unpack(&mut Cursor::new(nar), &dest).unwrap();
+        assert_eq!(count, 1);
+        assert!(dest.symlink_metadata().unwrap().file_type().is_symlink(), "应建成 symlink");
+        assert_eq!(fs::read_link(&dest).unwrap(), Path::new("libfoo.so.1.2.3"));
+        let _ = fs::remove_file(&dest);
+    }
+
+    #[test]
+    fn reject_path_traversal_entry_names() {
+        // 不可信镜像给的目录项名若含 `..`、`/` 或 `.` 必须被拒(zip-slip 防御)。
+        for bad in ["..", ".", "evil/sub", "../escape"] {
+            let nar = make_nar_dir_with_entry(bad);
+            let dest = std::env::temp_dir().join(format!("nar-trav-{}-{}", bad.len(), std::process::id()));
+            let _ = fs::remove_dir_all(&dest);
+            let r = unpack(&mut Cursor::new(nar), &dest);
+            assert!(
+                matches!(r, Err(NarError::Format(_))),
+                "穿越名 {bad:?} 必须被拒,实得 {r:?}"
+            );
+            let _ = fs::remove_dir_all(&dest);
+        }
+    }
+
+    #[test]
+    fn reject_overlong_entry_name() {
+        // 超 MAX_NAME(255)的目录项名被拒。
+        let long = "a".repeat(256);
+        let nar = make_nar_dir_with_entry(&long);
+        let dest = std::env::temp_dir().join(format!("nar-longname-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dest);
+        assert!(matches!(unpack(&mut Cursor::new(nar), &dest), Err(NarError::Format(_))));
+        let _ = fs::remove_dir_all(&dest);
+    }
+
+    #[test]
+    fn reject_overlong_symlink_target() {
+        // 超 MAX_TARGET(4095)的 symlink target 被拒。
+        let long = "x".repeat(4096);
+        let nar = make_nar_symlink(&long);
+        let dest = std::env::temp_dir().join(format!("nar-longtarget-{}", std::process::id()));
+        let _ = fs::remove_file(&dest);
+        assert!(matches!(unpack(&mut Cursor::new(nar), &dest), Err(NarError::Format(_))));
+        let _ = fs::remove_file(&dest);
+    }
+
+    #[test]
+    fn reject_truncated_stream() {
+        // 截断流(只有 magic,后续节点缺失)→ IO 错误(read_exact 失败),不 panic。
+        let mut buf = Vec::new();
+        write_str(&mut buf, "nix-archive-1");
+        write_str(&mut buf, "("); // 开了节点就断
+        let dest = std::env::temp_dir().join(format!("nar-trunc-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dest);
+        assert!(unpack(&mut Cursor::new(buf), &dest).is_err(), "截断流应报错而非 panic");
+        let _ = fs::remove_dir_all(&dest);
+    }
+
+    #[test]
+    fn reject_non_utf8_string() {
+        // 字符串字段含非 UTF-8 字节 → Format 错(read_string 的 from_utf8 守卫)。
+        let mut buf = Vec::new();
+        write_str(&mut buf, "nix-archive-1");
+        write_str(&mut buf, "(");
+        write_str(&mut buf, "type");
+        // 写一个长度 4 的非 UTF-8 字符串(0xff 字节)。
+        buf.extend_from_slice(&(4u64).to_le_bytes());
+        buf.extend_from_slice(&[0xff, 0xfe, 0xfd, 0xfc]);
+        buf.extend_from_slice(&[0u8; 4]); // pad to 8
+        let dest = std::env::temp_dir().join(format!("nar-nonutf8-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dest);
+        assert!(matches!(unpack(&mut Cursor::new(buf), &dest), Err(NarError::Format(_))));
+        let _ = fs::remove_dir_all(&dest);
+    }
 }
