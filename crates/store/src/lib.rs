@@ -451,6 +451,78 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    // put_symlink 往返 + ingest_dir 保留 symlink 不解引用的测试在 WSL/真 Linux 跑
-    // (见 tests/milestone1.rs 与 NTFS symlink 限制,CLAUDE.md)。
+    // ── P1-10:symlink 保留不解引用是 PoC-5 铁律,与 setuid(已测)同级,补正向测试 ──
+
+    #[cfg(unix)]
+    #[test]
+    fn put_symlink_roundtrip_and_loadtime_verify() {
+        let root = tmp().join("symlink-rt");
+        let _ = std::fs::remove_dir_all(&root);
+        let store = Store::open(&root).unwrap();
+        let meta = FileMeta { mode: 0o777, is_symlink: true };
+        // symlink 的"内容"= target 路径字节(指向 store 外的库版本名,典型 soname 链接)。
+        let target = Path::new("libc.so.6");
+        let dir = store.put_symlink("libc.so", target, meta).unwrap();
+        let link = dir.join("libc.so");
+        // 确实是 symlink、未解引用、目标保留。
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_link(&link).unwrap(), target);
+        // 加载期校验:get() 对 symlink 走 link-target 字节哈希,往返成功。
+        let hash = dir.file_name().unwrap().to_string_lossy();
+        let hash = hash.split('-').next().unwrap().to_string();
+        assert!(store.get(&hash, "libc.so").is_ok(), "symlink 对象应能加载期校验通过");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn get_detects_symlink_target_tamper() {
+        // 篡改 symlink 指向(重指到别的 target)→ 哈希变化 → HashMismatch。
+        let root = tmp().join("symlink-tamper");
+        let _ = std::fs::remove_dir_all(&root);
+        let store = Store::open(&root).unwrap();
+        let meta = FileMeta { mode: 0o777, is_symlink: true };
+        let dir = store.put_symlink("l", Path::new("good-target"), meta).unwrap();
+        let hash = dir.file_name().unwrap().to_string_lossy();
+        let hash = hash.split('-').next().unwrap().to_string();
+        assert!(store.get(&hash, "l").is_ok());
+        // 重指:删旧链接,建指向 evil-target 的新链接(同名)。
+        let link = dir.join("l");
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink("evil-target", &link).unwrap();
+        match store.get(&hash, "l") {
+            Err(StoreError::HashMismatch { expected, .. }) => assert_eq!(expected, hash),
+            other => panic!("篡改 symlink target 后应 HashMismatch,实得 {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ingest_dir_preserves_symlink_without_deref() {
+        // PoC-5:ingest_dir 遇 symlink 必须保留为 symlink(is_symlink=true),不跟进目标。
+        let root = tmp().join("ingest-symlink");
+        let _ = std::fs::remove_dir_all(&root);
+        let src = root.join("pkg");
+        std::fs::create_dir_all(src.join("lib")).unwrap();
+        std::fs::write(src.join("lib/libfoo.so.1.2.3"), b"real-lib-body").unwrap();
+        // soname 链接:libfoo.so.1 → libfoo.so.1.2.3(动态链接器按 soname 查找的典型布局)。
+        std::os::unix::fs::symlink("libfoo.so.1.2.3", src.join("lib/libfoo.so.1")).unwrap();
+
+        let store = Store::open(root.join("store")).unwrap();
+        let entries = store.ingest_dir(&src).unwrap();
+        let link_entry = entries
+            .iter()
+            .find(|e| e.rel_path == PathBuf::from("lib/libfoo.so.1"))
+            .expect("应有 libfoo.so.1 条目");
+        assert!(link_entry.meta.is_symlink, "soname 链接必须保留为 symlink(未解引用)");
+        // store 里它确实是个 symlink,而非被解引用复制成普通文件。
+        let stored = link_entry.store_dir.join("libfoo.so.1");
+        assert!(
+            std::fs::symlink_metadata(&stored).unwrap().file_type().is_symlink(),
+            "store 内对象应仍是 symlink"
+        );
+        assert_eq!(std::fs::read_link(&stored).unwrap(), PathBuf::from("libfoo.so.1.2.3"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
