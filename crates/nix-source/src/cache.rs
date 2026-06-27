@@ -105,6 +105,12 @@ impl NixCacheClient {
         if dest.exists() {
             return Ok(0); // 已存在,跳过
         }
+        // 中断恢复(P1-6):解包进**临时目录**,全部校验通过才原子 rename 到 dest。
+        // 旧实现直接解进 dest,SIGKILL/断电/磁盘满 留下半写 dest,下次 `exists()` 即跳过
+        // 当完整 → 静默损坏的对象被链入世代。现在 dest 只在 rename 那一刻出现,且必然完整。
+        // 临时名带 pid,避免并发/残留碰撞;函数退出前未 rename 的临时目录一律清掉。
+        let tmp_dest = self.store_dir.join(format!(".tmp-{}-{}", std::process::id(), ref_name));
+        let _ = std::fs::remove_dir_all(&tmp_dest); // 清掉同名残留(上次中断)
 
         let nar_url = format!("{}/{}", self.mirror, info.url);
 
@@ -131,9 +137,9 @@ impl NixCacheClient {
             })?;
 
         let nar_stdout = xz.stdout.take().unwrap();
-        // tee:解包的同时算 NAR 内容哈希(完整性校验,P0-2)。
+        // tee:解包的同时算 NAR 内容哈希(完整性校验,P0-2)。解进临时目录(P1-6)。
         let mut hashing = HashingReader::new(nar_stdout);
-        let count = nar::unpack(&mut hashing, &dest)?;
+        let count = nar::unpack(&mut hashing, &tmp_dest)?;
         // NAR 内容哈希覆盖**整个**字节流,但 unpack 可能未读到 EOF(末尾 padding 等),
         // 必须把剩余字节也喂进 hasher,否则摘要不完整。
         let mut drain = [0u8; 8192];
@@ -142,7 +148,7 @@ impl NixCacheClient {
                 Ok(0) => break,
                 Ok(_) => {}
                 Err(e) => {
-                    let _ = std::fs::remove_dir_all(&dest);
+                    let _ = std::fs::remove_dir_all(&tmp_dest);
                     return Err(CacheError::NarFetch { url: nar_url, reason: format!("读 NAR 流失败: {e}") });
                 }
             }
@@ -154,20 +160,39 @@ impl NixCacheClient {
         let xz_status = xz.wait()?;
         if !xz_status.success() {
             // 清理不完整的解包
-            let _ = std::fs::remove_dir_all(&dest);
+            let _ = std::fs::remove_dir_all(&tmp_dest);
             return Err(CacheError::NarFetch {
                 url: nar_url,
                 reason: format!("xz 解压失败(status {})", xz_status),
             });
         }
 
-        // 完整性闸门:NAR 内容哈希须匹配 narinfo 的 NarHash。不符 → 删解包结果 + 报错。
+        // 完整性闸门:NAR 内容哈希须匹配 narinfo 的 NarHash。不符 → 删临时目录 + 报错。
         // 这是"可复现只来自校验过的字节"的底线(ADR-0001):传输损坏/中间人/投毒都在此被拒。
         if let Err(e) = info.verify_nar_hash(&nar_digest) {
-            let _ = std::fs::remove_dir_all(&dest);
+            let _ = std::fs::remove_dir_all(&tmp_dest);
             return Err(CacheError::NarFetch {
                 url: nar_url,
                 reason: format!("{e}"),
+            });
+        }
+
+        // 全部校验通过 → 原子 rename 临时目录到正式 dest(提交点,P1-6)。
+        // 在此之前任何中断都只留临时目录(下次进函数会被清理),dest 永不出现半成品。
+        // 极小概率竞态:并发拉同一包时对方已 rename 出 dest → 我方 rename 可能失败/多余,
+        // 此时直接清掉自己的临时目录并视为成功(对方的 dest 已校验完整)。
+        if dest.exists() {
+            let _ = std::fs::remove_dir_all(&tmp_dest);
+            return Ok(0);
+        }
+        if let Err(e) = std::fs::rename(&tmp_dest, &dest) {
+            let _ = std::fs::remove_dir_all(&tmp_dest);
+            if dest.exists() {
+                return Ok(0); // 竞态:对方刚 rename 好,接受之
+            }
+            return Err(CacheError::NarFetch {
+                url: nar_url,
+                reason: format!("原子提交 store 对象失败: {e}"),
             });
         }
 
