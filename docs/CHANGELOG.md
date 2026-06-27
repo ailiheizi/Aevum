@@ -34,13 +34,25 @@
 - `fetch_and_unpack` 原地解进 dest,仅 xz 非零才清理。SIGKILL/断电/磁盘满 留半成品 dest,下次 `exists()` 当完整 → 损坏对象入世代。
 - 改:解进 `.tmp-<pid>-<ref>`,xz 成功 + NarHash 校验通过才原子 rename 到 dest;dest 只在提交点出现且必完整;残留临时目录进函数即清。e2e:真拉 ripgrep,dest 出现、零残留临时目录。
 
+### P1-5 并发锁(flock)
+
+- 全仓无 advisory lock:两个并发 install 都取 `next_generation_id`=max+1 算出**同一** id,交错写同一 `gen-NNN/packages`,还互相 `remove_dir_all` 共享的 unpacked 目录。
+- 加 `FsLock`:对 `$AEVUM_ROOT/.lock` `flock(LOCK_EX)`,RAII(进程退出/崩溃内核自动释放);main() 在 match 前对变更类子命令(install/remove/update/maintain/nix-fetch/switch/rollback/gc/activate/compose/ai)取锁,只读命令不取可并发;gen id 在锁内分配。仅 libc(已 vendored)。
+- e2e:shell `flock` 持锁 4s,期间真 `aevum gc` 被阻塞满 4s(而非立即返回),证明 Rust FsLock 与 OS flock 互锁。
+
+### P1-7 make_generation 原子构建
+
+- `make_generation` 原地建 `packages/`+`lock.txt`,中断留半填充 gen-NNN 被当完整世代用(缺文件、GC 漏算)。
+- 改:建进 `.gen-NNN.tmp.<pid>`,完整后原子 rename 到 gen-NNN;失败清临时目录;重建先删旧再 rename。临时名被三处 gen-NNN 枚举器安全忽略。后续 templates/source-lock 写入在 rename 之后,时序不变。
+- 测试:+1 rebuild 正确替换 + 零残留临时目录 + lock.txt/packages 同时就绪。
+
 ### 其它
 
 - 修正 workspace `repository` URL(`aevum/aevum` → `ailiheizi/Aevum`)。
 
 ### 仍待(P1 余项,见 AUDIT-ROADMAP.md)
 
-- P1-5 并发锁(flock)、P1-7 make_generation 原地构建中断、fmt/clippy 转阻断、P0-2 签名半边(需 vendor ed25519)。
+- fmt/clippy 转阻断(本环境装不上 rustfmt/clippy 组件,待本地 `cargo fmt` 一次后由 CI 去掉 `continue-on-error`)、P0-2 签名半边(需 vendor ed25519)。
 
 ---
 

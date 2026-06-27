@@ -5,7 +5,7 @@
 
 > **进度(2026-06-26)**:P0 七条已处理 —— P0-1 ✅(609a32d)、P0-2 ✅完整性/⏳签名(b2af2f7)、P0-3 ✅(609a32d)、P0-4 ✅(aa4e62a)、P0-5/6 ✅(2f7b8b2)、P0-7 ✅(a49cfd1)。剩 P0-2 签名半边(需 vendor ed25519)+ 全部 P1/P2。
 >
-> **进度(2026-06-27)P1 批次**:P1-1 CI ✅(3d9f041→6bade99,build-test 绿)、P1-2 clean-clone ✅(2302407)、P1-3 update 不毁索引 ✅(c735587)、P1-4 aevum init ✅(5a15431)、P1-6 NAR 中断恢复 ✅(5970cce)。剩 P1-5 并发锁、P1-7 make_generation 原地构建、fmt/clippy 转阻断。
+> **进度(2026-06-27)P1 批次**:P1-1 CI ✅(3d9f041→6bade99,build-test 绿)、P1-2 clean-clone ✅(2302407)、P1-3 update 不毁索引 ✅(c735587)、P1-4 aevum init ✅(5a15431)、P1-5 并发锁 ✅(2bf937c)、P1-6 NAR 中断恢复 ✅(5970cce)、P1-7 make_generation 原子构建 ✅(da060c5)。剩 fmt/clippy 转阻断(本地装不上组件)、P0-2 签名半边。
 
 ---
 
