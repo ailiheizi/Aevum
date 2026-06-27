@@ -10,7 +10,7 @@
 
 #![cfg(unix)]
 
-use aevum_cli::{active_lock_name, latest_lock_name, open_generations, record_generation_lock, Layout};
+use aevum_cli::{active_lock_name, open_generations, record_generation_lock, Layout};
 use aevum_generation::PackageRef;
 
 fn tmp_layout(tag: &str) -> Layout {
@@ -50,22 +50,20 @@ fn active_lock_follows_active_generation_through_rollback() {
     record_generation_lock(&layout, 2, "beta").unwrap();
     gens.set_active(2).unwrap();
 
-    // active=gen-2 → 应解析到 beta。
+    // active=gen-2 → 应解析到 beta(P0-5/6 契约:认 active 世代的 source-lock 指针)。
     assert_eq!(active_lock_name(&layout).unwrap().as_deref(), Some("beta"));
-    // 且 mtime 最新的也是 beta(此时两条路径恰好一致)。
-    assert_eq!(latest_lock_name(&layout).as_deref(), Some("beta"));
 
     // 回滚:active 指针回 gen-1。
     gens.set_active(1).unwrap();
 
-    // 关键:active_lock_name 必须跟着回到 alpha(修复前会错误地仍返回 mtime 最新的 beta)。
+    // 关键:active_lock_name 必须跟着回到 alpha(修复前会错误地按 mtime 取最新 = beta)。
+    // 注:不断言 latest_lock_name 的具体返回——alpha/beta 两个 lock 在快速文件系统上
+    // 可能落在同一 mtime 刻度,其 tie-break 是非确定的;这正是为何 P0-5/6 不能依赖它。
     assert_eq!(
         active_lock_name(&layout).unwrap().as_deref(),
         Some("alpha"),
-        "回滚后 active_lock_name 应认 active 世代(alpha),而非最新 lock(beta)"
+        "回滚后 active_lock_name 应认 active 世代(alpha),而非最新 lock"
     );
-    // 反证:mtime 最新仍是 beta —— 说明老逻辑(latest_lock_name)在回滚后确实会撒谎。
-    assert_eq!(latest_lock_name(&layout).as_deref(), Some("beta"));
 }
 
 #[test]
