@@ -891,4 +891,74 @@ mod tests {
     // 在 WSL/真 Linux 跑,fixture 用 poc/poc5-complex-pkg/ 的数据。这是里程碑2 的验收点。
     // build_closure_resolved 的 BFS 递归 + interpreter 解析需真实 ELF,
     // 用真实 rg 在 tests/milestone1.rs(WSL)验证。
+
+    // ── P1-11:Strict 跨源**硬阻断**此前从未被真正断言(旧测试只验空包 Ok)──
+    // 用 cc 编译带 DT_NEEDED 的真 .so 让 build_closure 填充 needed_libs,
+    // 再用返回跨源 provenance 的 fake resolver 驱动 BFS,断言 Strict→Err、Lenient→记录。
+
+    #[cfg(unix)]
+    fn have_cc() -> bool {
+        std::process::Command::new("cc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+    }
+
+    /// fake resolver:任何 soname 都"解析成功",但 provenance 永远是 Debian。
+    /// 配合 input.source=Arch → 必跨源。无需真实库文件(只看 provenance 判定)。
+    #[cfg(unix)]
+    struct CrossSourceResolver {
+        fixed_path: PathBuf,
+    }
+    #[cfg(unix)]
+    impl LibResolver for CrossSourceResolver {
+        fn resolve_in_source(&self, _soname: &str, _source: &Source) -> Option<PathBuf> {
+            Some(self.fixed_path.clone())
+        }
+        fn provenance(&self) -> Option<Source> {
+            Some(Source::Debian) // 命中源恒为 Debian
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn strict_blocks_real_cross_source_lenient_records() {
+        if !have_cc() {
+            eprintln!("SKIP strict_blocks_real_cross_source: 无 cc");
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("aevum-strict-real-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+        // 编译一个依赖 libm 的真可执行,放进包 root → build_closure 扫到 DT_NEEDED(libm.so.6)。
+        let src = root.join("m.c");
+        std::fs::write(&src, "#include <math.h>\nint main(int c,char**v){return (int)sqrt((double)c);}\n").unwrap();
+        let bin = root.join("usr/bin/mathprog");
+        let ok = std::process::Command::new("cc").arg(&src).arg("-lm").arg("-o").arg(&bin).status().unwrap();
+        assert!(ok.success(), "cc 编译失败");
+
+        let input = PackageInput {
+            name: "mathprog".into(),
+            source: Source::Arch, // 包是 Arch
+            root: root.clone(),
+            main_binary: Some(PathBuf::from("usr/bin/mathprog")),
+            runtime_dirs: vec![],
+            data_dirs: vec![],
+        };
+        // resolver 把 libm 解析成"来自 Debian"→ 跨源(Arch ≠ Debian)。
+        let resolver = CrossSourceResolver { fixed_path: bin.clone() };
+
+        // Strict:必须硬阻断。
+        let strict = build_closure_resolved_with_policy(&input, &resolver, SourcePolicy::Strict);
+        assert!(
+            matches!(strict, Err(ClosureError::CrossSource { .. })),
+            "Strict 下跨源库必须 Err(CrossSource),实得 {strict:?}"
+        );
+
+        // Lenient:不阻断,但记 cross_source 诊断。
+        let lenient = build_closure_resolved_with_policy(&input, &resolver, SourcePolicy::Lenient).unwrap();
+        assert!(
+            !lenient.cross_source.is_empty(),
+            "Lenient 下跨源应被记入 cross_source 诊断"
+        );
+        assert!(lenient.cross_source.iter().any(|h| h.want == Source::Arch && h.got == Source::Debian));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
