@@ -4,6 +4,36 @@
 
 ---
 
+## 2026-06-27(六)補 —— P1 批次2:AI JSON 加固 + PoC 铁律测试缺口补齐
+
+CI 上线后,补齐审计 P1 里"真 bug + 测试缺口"两类,每项独立 commit + CI 验证。
+
+### AI JSON 处理加固(P1-13/14/15/16,真 bug)
+
+`ai_client.rs` 的 JSON 收发有 4 个缺陷,且 `lib.rs` 有第二套更糟的实现(live AI 走的是它):
+
+- **P1-15(DoS)**:诊断切片 `&resp[..len.min(200)]` 在第 200 字节落多字节 UTF-8 中间时 panic(中文错误体极可能)。攻击者可控网络输入 abort 进程,违反 ADR-0005 优雅降级。新 `truncate_chars()` 按字符边界切。
+- **P1-13**:`extract_*_content` 回看一字节判闭引号,内容合法地以反斜杠结尾(代码/正则/Windows 路径)时吞掉闭引号、返回含下游字段的垃圾。改逐字符 unescaper。
+- **P1-14**:两套分歧提取器(ai_client 的 `.replace()` 链 vs lib.rs 的扫描器),都不解 `\uXXXX`(中文工作语言下 CJK 转义留成字面 `u00e9`)。收敛到单个 `extract_json_string()`,加 `\uXXXX` 解码。
+- **P1-16**:`json_escape` 只处理 `\ " \n \r \t`,其余 C0 控制字节原样进请求体(RFC 8259 非法,API 拒)。改 `<0x20` 全转 `\uXXXX`。
+- lib.rs 的 `extract_content`/`json_escape` 改为委托 ai_client(单一真相源)。+5 测试,intent 27 测全过。
+
+### PoC 铁律测试缺口(P1-8/9/10/11)
+
+CI 能真跑 unix 测试了,补齐直击铁律的正向断言(此前只有负向/空壳测试):
+
+- **P1-8 elf**:用 cc 测试期编译真 ELF(无 cc 跳过),正向断言 DT_NEEDED/DT_SONAME/PT_INTERP 抽取,scan_dir 只返真 ELF(跳非 ELF + symlink)。
+- **P1-9 NAR**:构造字节流测 symlink 节点保留、4 种路径穿越名(`..`/`.`/`a/b`/`../x`)拒绝、超长名/target 拒绝、截断流/非 UTF-8 报错不 panic。
+- **P1-10 store**:symlink 往返 + 加载期哈希校验、target 篡改 → HashMismatch、ingest_dir 保留 symlink 不解引用(PoC-5)。
+- **P1-11 closure-builder**:cc 编译真 libm-linked 可执行填充 needed_libs + fake 跨源 resolver,断言 Strict→Err(CrossSource)、Lenient→记 CrossSourceHit(PoC-4)。此前测试自承只验空包 Ok。
+- 各 crate 测试数:elf 2→5、store 6→9、nix-source 19→25、closure-builder 11→14、intent 22→27。
+
+### 方法论
+
+新 ELF 测试用 cc 真编译 fixture(不 check-in 二进制 blob,真工具链产物验证 goblin/解析),无 cc 优雅跳过(同 milestone7 的 have() 模式)。
+
+---
+
 ## 2026-06-27(六)—— P1 批次:CI 上线 + 健壮性/可用性修复
 
 承接 P0 全清,本轮做 P1 高价值项。**最大成果:CI 第一次真跑 unix 测试**。
