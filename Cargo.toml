@@ -36,6 +36,8 @@ thiserror = "2"
 # 哈希(内容寻址 store / closure_id)
 sha2 = "0.10"
 hex = "0.4"
+# flock 并发锁(unix advisory lock;已随 goblin 等传递引入,显式声明复用)
+libc = "0.2"
 # ELF 解析(生产用库,PoC 手写仅为零依赖验证)
 goblin = "0.9"
 # 序列化(lock 文件 / 世代元数据)

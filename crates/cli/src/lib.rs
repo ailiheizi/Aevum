@@ -1546,6 +1546,59 @@ pub fn refresh_profile(_layout: &Layout) -> Result<usize, Box<dyn std::error::Er
     Err("refresh_profile 需要 unix。请在 Linux/WSL 运行".into())
 }
 
+/// 进程级排他锁(P1-5):防两个 aevum 变更命令并发改同一 root。
+///
+/// 全仓此前无任何 advisory lock。两个并发 install:`next_generation_id` 都取 max+1
+/// 算出**同一** id,向同一 `gen-NNN/packages` 交错写 symlink;还共享 per-package
+/// unpacked 目录互相 `remove_dir_all`。set_active 的 rename 原子,但其前的一切都不是。
+///
+/// 实现:对 `$AEVUM_ROOT/.lock` 文件 `flock(LOCK_EX)`。RAII:guard 在 drop 时关闭 fd,
+/// 内核自动释放锁(进程崩溃/被 kill 也释放,不会留死锁)。变更命令开头取锁、持有到结束。
+/// unix 专有;非 unix 为 no-op(变更命令本就只在 Linux/WSL 真跑)。
+#[cfg(unix)]
+pub struct FsLock {
+    _file: std::fs::File,
+}
+
+#[cfg(unix)]
+impl FsLock {
+    /// 取 `$AEVUM_ROOT/.lock` 的排他锁(阻塞直到拿到)。root 不存在则先建。
+    pub fn acquire(layout: &Layout) -> Result<Self, Box<dyn std::error::Error>> {
+        use std::os::unix::io::AsRawFd;
+        std::fs::create_dir_all(&layout.root)?;
+        let path = layout.root.join(".lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)?;
+        // flock LOCK_EX:阻塞获取排他锁。EINTR 时重试。
+        loop {
+            let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+            if rc == 0 {
+                break;
+            }
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return Err(format!("获取 {} 排他锁失败: {err}", path.display()).into());
+        }
+        Ok(FsLock { _file: file })
+    }
+}
+// drop 时 File 关闭 → 内核释放 flock(无需显式 unlock)。
+
+#[cfg(not(unix))]
+pub struct FsLock;
+
+#[cfg(not(unix))]
+impl FsLock {
+    pub fn acquire(_layout: &Layout) -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(FsLock) // 非 unix:no-op(变更命令本就需 unix)
+    }
+}
+
 /// 初始化一个 Aevum root:建好目录骨架 + 写**引导版** `profile/env.sh`(P1-4)。
 ///
 /// 解决"开箱即崩":`env.sh` 原本只在 refresh_profile(首次 install/switch 后)才写,

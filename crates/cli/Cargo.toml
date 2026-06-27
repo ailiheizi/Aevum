@@ -30,3 +30,6 @@ clap.workspace = true
 anyhow.workspace = true
 sha2.workspace = true
 hex.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true

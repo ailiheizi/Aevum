@@ -348,6 +348,15 @@ enum ServiceAction {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let layout = aevum_cli::Layout::from_env();
+
+    // P1-5 并发锁:变更类命令开头取 $AEVUM_ROOT 排他锁,持有到命令结束(_lock 生命周期覆盖整个 match)。
+    // 只读命令(list/search/explain/resolve/audit-config/build/export 等)不取锁,可并发。
+    let _lock = if is_mutating(&cli.command) {
+        Some(aevum_cli::FsLock::acquire(&layout).map_err(|e| anyhow::anyhow!("{e}"))?)
+    } else {
+        None
+    };
+
     match cli.command {
         Command::Resolve { packages, intent, config, inputs, mock, yes, name, repair } => {
             if let Some(config_path) = config {
@@ -1389,6 +1398,26 @@ fn maintain_cmd(
     _confirm: bool,
 ) -> anyhow::Result<()> {
     Err(anyhow::anyhow!("aevum maintain 需要 unix(解包/世代 symlink)。请在 Linux/WSL 运行"))
+}
+
+/// 该命令是否会改动 $AEVUM_ROOT 状态(store/世代/active/索引/profile)。
+/// 变更类取排他锁串行化(P1-5);只读类可并发。
+fn is_mutating(cmd: &Command) -> bool {
+    matches!(
+        cmd,
+        Command::Init { .. }
+            | Command::Update { .. }
+            | Command::Install { .. }
+            | Command::Remove { .. }
+            | Command::Maintain { .. }
+            | Command::NixFetch { .. }
+            | Command::Switch { .. }
+            | Command::Rollback { .. }
+            | Command::Gc { .. }
+            | Command::Activate { .. }
+            | Command::ComposeGeneration { .. }
+            | Command::Ai { .. }
+    )
 }
 
 /// 设可执行位(0755)。unix 专有;非 unix 为 no-op(引导相关命令本就只在 Linux/WSL 真跑)。

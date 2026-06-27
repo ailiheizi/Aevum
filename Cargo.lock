@@ -21,6 +21,7 @@ dependencies = [
  "anyhow",
  "clap",
  "hex",
+ "libc",
  "sha2",
 ]
 
