@@ -158,6 +158,102 @@ mod tests {
         assert!(matches!(err, ElfError::NotElf(_)));
     }
 
-    // 真实 ELF 的解析测试在 WSL/真 Linux 跑,fixture 用 poc/poc4-arch-isolation/data/ 的 rg。
-    // 参见 docs/guides/01-rust-implementation-kickoff.md §4 测试策略。
+    // ── P1-8:正向断言 DT_NEEDED/DT_SONAME/PT_INTERP 抽取 + scan_dir 只返真 ELF ──
+    // 用 cc 在测试期编译真 ELF(无 cc 则跳过,同 milestone7 的 have() 模式);
+    // 不 check-in 二进制 blob,fixture 来自真工具链 → 真正校验 goblin 解析而非手搓字节。
+
+    #[cfg(unix)]
+    fn have_cc() -> bool {
+        std::process::Command::new("cc")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(unix)]
+    fn cc_compile(dir: &std::path::Path, src_name: &str, src: &str, args: &[&str]) -> std::path::PathBuf {
+        let src_path = dir.join(src_name);
+        std::fs::write(&src_path, src).unwrap();
+        let out = dir.join(src_name.replace(".c", ".out"));
+        let status = std::process::Command::new("cc")
+            .arg(&src_path)
+            .args(args)
+            .arg("-o")
+            .arg(&out)
+            .status()
+            .unwrap();
+        assert!(status.success(), "cc 编译 {src_name} 失败");
+        out
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extracts_needed_soname_from_real_so() {
+        if !have_cc() {
+            eprintln!("SKIP extracts_needed_soname: 无 cc");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("elf-needed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // 依赖 libm 的共享库,带 soname。
+        let so = cc_compile(
+            &dir,
+            "m.c",
+            "#include <math.h>\ndouble g(double x){return sqrt(x)+cos(x);}\n",
+            &["-shared", "-fPIC", "-lm", "-Wl,-soname,libm_user.so.1"],
+        );
+        let info = parse_file(&so).unwrap();
+        assert!(info.is_dynamic, "共享库应是 dynamic");
+        assert!(info.needed.iter().any(|n| n.starts_with("libm.so")), "DT_NEEDED 应含 libm.so.*: {:?}", info.needed);
+        assert_eq!(info.soname.as_deref(), Some("libm_user.so.1"), "DT_SONAME 应抽取");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extracts_interpreter_from_real_exe() {
+        if !have_cc() {
+            eprintln!("SKIP extracts_interpreter: 无 cc");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("elf-interp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = cc_compile(&dir, "main.c", "int main(){return 0;}\n", &[]);
+        let info = parse_file(&exe).unwrap();
+        // 动态可执行有 PT_INTERP(ld-linux...)。
+        assert!(info.interpreter.is_some(), "动态可执行应有 PT_INTERP");
+        assert!(info.interpreter.as_deref().unwrap().contains("ld-"), "interpreter 应是 ld-linux: {:?}", info.interpreter);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_dir_returns_only_real_elfs_skipping_nonelf_and_symlink() {
+        if !have_cc() {
+            eprintln!("SKIP scan_dir: 无 cc");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("elf-scan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // 2 个真 ELF(共享库 + 可执行)。
+        cc_compile(&dir, "a.c", "int a(){return 1;}\n", &["-shared", "-fPIC", "-Wl,-soname,liba.so"]);
+        cc_compile(&dir, "main.c", "int main(){return 0;}\n", &[]);
+        // 1 个非 ELF 文件。
+        std::fs::write(dir.join("readme.txt"), b"not an elf").unwrap();
+        // 1 个 symlink 指向真 ELF(scan_dir 应跳过 symlink 本身,不重复解析)。
+        std::os::unix::fs::symlink(dir.join("a.out"), dir.join("a-link.so")).unwrap();
+
+        let infos = scan_dir(&dir).unwrap();
+        // 恰好 2 个真 ELF(非 ELF 跳过、symlink 跳过)。
+        assert_eq!(infos.len(), 2, "scan_dir 应只返 2 个真 ELF(跳非 ELF + symlink),实得 {:?}", infos.iter().map(|i| &i.path).collect::<Vec<_>>());
+        // 确定性排序。
+        assert!(infos.windows(2).all(|w| w[0].path <= w[1].path), "应有序");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // 真实复杂包(rg/python)的 dlopen 全包闭包测试仍在 WSL 用 poc fixture 跑(里程碑2 验收)。
 }
