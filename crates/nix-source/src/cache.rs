@@ -40,6 +40,23 @@ impl<R: Read> Read for HashingReader<R> {
     }
 }
 
+/// curl 网络韧性参数(P1-20/21):连接超时 + 总超时 + 瞬时抖动重试。
+/// 对齐 download_deb 的 `--max-time 120`;Nix 闭包动辄数百包,单包卡死会挂死整个 BFS。
+/// `--retry-connrefused` 覆盖镜像短暂不可达;`--fail` 让 HTTP 错误码也算失败(不吞)。
+const CURL_NET_ARGS: &[&str] = &[
+    "-sL",
+    "--fail",
+    "--connect-timeout",
+    "30",
+    "--max-time",
+    "300",
+    "--retry",
+    "3",
+    "--retry-delay",
+    "2",
+    "--retry-connrefused",
+];
+
 #[derive(Debug, Error)]
 pub enum CacheError {
     #[error("narinfo 拉取失败({hash}): {reason}")]
@@ -76,7 +93,8 @@ impl NixCacheClient {
     pub fn fetch_narinfo(&self, hash: &str) -> Result<NarInfo, CacheError> {
         let url = format!("{}/{}.narinfo", self.mirror, hash);
         let output = Command::new("curl")
-            .args(["-sL", "--fail", &url])
+            .args(CURL_NET_ARGS)
+            .arg(&url)
             .output()
             .map_err(|e| CacheError::NarInfoFetch {
                 hash: hash.to_string(),
@@ -116,7 +134,8 @@ impl NixCacheClient {
 
         // curl | xz -d → pipe
         let mut curl = Command::new("curl")
-            .args(["-sL", "--fail", &nar_url])
+            .args(CURL_NET_ARGS)
+            .arg(&nar_url)
             .stdout(Stdio::piped())
             .spawn()
             .map_err(|e| CacheError::NarFetch {
@@ -251,7 +270,8 @@ impl NixCacheClient {
         // 一个单引号即可逃逸命令(`x'; rm -rf ~; echo '`)→ 注入。
         // 这里用 argv 形式 spawn curl,管道接 xz,匹配在 Rust 里做;name 仅作数据。
         let mut curl = Command::new("curl")
-            .args(["-sL", "--fail", &url])
+            .args(CURL_NET_ARGS)
+            .arg(&url)
             .stdout(Stdio::piped())
             .spawn()
             .map_err(|e| CacheError::NotFound(format!("curl spawn 失败: {e}")))?;

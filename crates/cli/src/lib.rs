@@ -845,8 +845,16 @@ pub fn download_deb(
     let url = format!("{}/{}", mirror.trim_end_matches('/'), filename);
     let status = std::process::Command::new("curl")
         .arg("-sL")
+        .arg("--connect-timeout")
+        .arg("30")
         .arg("--max-time")
         .arg("120")
+        // P1-21:瞬时网络抖动重试。数百包闭包里单次失败本会让 propose 从头重来。
+        .arg("--retry")
+        .arg("3")
+        .arg("--retry-delay")
+        .arg("2")
+        .arg("--retry-connrefused")
         .arg("--fail")
         .arg(&url)
         .arg("-o")
