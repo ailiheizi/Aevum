@@ -24,10 +24,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust 1.85
+      - name: Install Rust 1.88
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.85"
+          toolchain: "1.88"
 
       - name: Cache cargo registry + target
         uses: actions/cache@v4
@@ -59,10 +59,10 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust 1.85 + components
+      - name: Install Rust 1.88 + components
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.85"
+          toolchain: "1.88"
           components: rustfmt, clippy
       - name: rustfmt check
         run: cargo fmt --all --check
