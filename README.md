@@ -405,6 +405,7 @@ Aevum can **consume Nix's output** (`nix-fetch` pulls prebuilt nixpkgs packages)
 - [Changelog](docs/CHANGELOG.md) (58 iterations recorded)
 - [ADRs](docs/architecture/adr/) (5 architecture decision records)
 - [PoCs](poc/) (7 proofs of concept)
+- [Contributing](CONTRIBUTING.md) — dev setup, build/test, CI expectations
 
 ---
 

@@ -408,6 +408,7 @@ Aevum 可以**消费 Nix 的产出**(`nix-fetch` 直接拉 nixpkgs 预编译包)
 - [变更日志](docs/CHANGELOG.md)(58 轮迭代记录)
 - [ADR](docs/architecture/adr/)(5 个架构决策记录)
 - [PoC](poc/)(7 个概念验证)
+- [贡献指南](CONTRIBUTING.md) —— 开发环境、构建/测试、CI 期望
 
 ---
 
