@@ -81,9 +81,20 @@ impl GenerationManager {
 
     /// 造一个世代:`gen-NNN/packages/<name>` → symlink 到 store 对象目录,
     /// 并写 `lock.txt`(每行一个 object_id,供 GC)。对应 PoC 的 `make_generation`。
+    ///
+    /// 原子构建(P1-7):在**临时目录** `.gen-NNN.tmp.<pid>` 里建 `packages/` + `lock.txt`,
+    /// 全部完成后原子 rename 到 `gen-NNN`。旧实现原地建,SIGKILL/磁盘满 中途留下
+    /// 半填充的 `gen-NNN`(packages 不全、lock.txt 缺失或残缺),却被后续 set_active/
+    /// refresh_profile/verify 当作完整世代用 → 缺文件、GC 漏算对象。现在 gen-NNN 只在
+    /// rename 那一刻整体出现。重建已存在世代时:先建好临时目录,再删旧的、rename 覆盖。
     pub fn make_generation(&self, id: u64, packages: &[PackageRef]) -> Result<PathBuf> {
         let g = self.gen_dir(id);
-        let pkgdir = g.join("packages");
+        // 临时构建目录(与 gen 目录同父,保证 rename 在同一文件系统、原子)。
+        let tmp = self
+            .root
+            .join(format!(".gen-{id:03}.tmp.{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp); // 清掉上次中断的同名残留
+        let pkgdir = tmp.join("packages");
         std::fs::create_dir_all(&pkgdir).map_err(|source| GenError::Io {
             path: pkgdir.clone(),
             source,
@@ -99,21 +110,37 @@ impl GenerationManager {
                     source,
                 })?;
             }
-            // 已存在先删(重建世代时)
+            // 临时目录里不会有同名残留(已 remove_dir_all),但层级布局下同一父目录
+            // 可能被多个 ref 复用,故仍按需删旧。
             if link.exists() || is_symlink(&link) {
                 std::fs::remove_file(&link).map_err(|source| GenError::Io {
                     path: link.clone(),
                     source,
                 })?;
             }
-            symlink(&p.store_dir, &link)?;
+            if let Err(e) = symlink(&p.store_dir, &link) {
+                let _ = std::fs::remove_dir_all(&tmp);
+                return Err(e);
+            }
             refs.push(p.object_id.clone());
         }
-        let lock = g.join("lock.txt");
-        std::fs::write(&lock, refs.join("\n")).map_err(|source| GenError::Io {
-            path: lock.clone(),
-            source,
-        })?;
+        let lock = tmp.join("lock.txt");
+        if let Err(source) = std::fs::write(&lock, refs.join("\n")) {
+            let _ = std::fs::remove_dir_all(&tmp);
+            return Err(GenError::Io { path: lock, source });
+        }
+
+        // 提交点:原子 rename 临时目录 → gen-NNN。重建时先删旧世代(rename 不能覆盖非空目录)。
+        if g.exists() {
+            std::fs::remove_dir_all(&g).map_err(|source| GenError::Io {
+                path: g.clone(),
+                source,
+            })?;
+        }
+        if let Err(source) = std::fs::rename(&tmp, &g) {
+            let _ = std::fs::remove_dir_all(&tmp);
+            return Err(GenError::Io { path: g.clone(), source });
+        }
         Ok(g)
     }
 
@@ -378,6 +405,44 @@ mod tests {
         // symlink 目标解析回 store 对象目录
         assert!(refs[0].1.ends_with("ha-busybox"));
         assert!(refs[1].1.ends_with("hb-hello"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // P1-7:原子构建 —— rebuild 正确替换、提交后无残留临时目录、lock.txt 与 packages 同时就绪。
+    #[cfg(unix)]
+    #[test]
+    fn make_generation_atomic_rebuild_no_temp_leftover() {
+        let root = std::env::temp_dir().join(format!("aevum-gen-atomic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mgr = GenerationManager::open(&root).unwrap();
+        let store = root.join("store");
+        let d1 = store.join("h1-foo");
+        let d2 = store.join("h2-bar");
+        std::fs::create_dir_all(&d1).unwrap();
+        std::fs::create_dir_all(&d2).unwrap();
+
+        // 首建:gen-9 = {foo}。
+        let g1 = vec![PackageRef { name: "foo".into(), store_dir: d1.clone(), object_id: "h1-foo".into(), rel_path: Some(PathBuf::from("usr/bin/foo")) }];
+        let gdir = mgr.make_generation(9, &g1).unwrap();
+        assert!(gdir.join("packages/usr/bin/foo").exists(), "首建后 foo symlink 应在");
+        assert!(gdir.join("lock.txt").exists(), "lock.txt 应与 packages 一并就绪");
+        assert_eq!(std::fs::read_to_string(gdir.join("lock.txt")).unwrap(), "h1-foo");
+
+        // 重建同 id:gen-9 = {bar}。必须整体替换(旧 foo 不残留)。
+        let g2 = vec![PackageRef { name: "bar".into(), store_dir: d2.clone(), object_id: "h2-bar".into(), rel_path: Some(PathBuf::from("usr/bin/bar")) }];
+        mgr.make_generation(9, &g2).unwrap();
+        assert!(gdir.join("packages/usr/bin/bar").exists(), "重建后 bar 应在");
+        assert!(!gdir.join("packages/usr/bin/foo").exists(), "重建后旧 foo 不应残留");
+        assert_eq!(std::fs::read_to_string(gdir.join("lock.txt")).unwrap(), "h2-bar");
+
+        // 关键:提交后 root 下无任何 .gen-*.tmp.* 残留临时目录。
+        let leftovers: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".gen-"))
+            .collect();
+        assert!(leftovers.is_empty(), "不应有残留临时构建目录: {leftovers:?}");
+
         let _ = std::fs::remove_dir_all(&root);
     }
 }
