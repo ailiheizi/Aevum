@@ -19,8 +19,9 @@ English · [简体中文](README.zh-CN.md)
 ## Quick start
 
 ```bash
-# 1. Initialize (one-time)
-aevum update                        # download the Debian package index
+# 1. Initialize (one-time): creates the profile + index
+export AEVUM_ROOT=~/.aevum
+aevum init --update                 # build the layout + fetch the Debian index
 source $AEVUM_ROOT/profile/env.sh   # add this to your .bashrc
 
 # 2. Install packages (as simple as apt)
@@ -79,6 +80,7 @@ Aevum is a Linux userspace package manager written in Rust. Its core ideas:
 
 | Command | What it does |
 |---------|--------------|
+| `aevum init [--update]` | Initialize the root (profile + dirs + env.sh); `--update` also fetches the index |
 | `aevum ai "<natural language>"` | **Unified AI entry** — detects intent (install / explain / search …), multi-turn dialogue |
 | `aevum install <pkg...>` | Quick install (resolve → download → store → new generation → activate → refresh PATH) |
 | `aevum search <keyword>` | Search installable packages |

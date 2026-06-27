@@ -1546,6 +1546,42 @@ pub fn refresh_profile(_layout: &Layout) -> Result<usize, Box<dyn std::error::Er
     Err("refresh_profile 需要 unix。请在 Linux/WSL 运行".into())
 }
 
+/// 初始化一个 Aevum root:建好目录骨架 + 写**引导版** `profile/env.sh`(P1-4)。
+///
+/// 解决"开箱即崩":`env.sh` 原本只在 refresh_profile(首次 install/switch 后)才写,
+/// 但 README quick-start 让用户 `aevum update` 后立刻 `source env.sh` —— 此时文件不存在。
+/// `aevum init` 先把 `profile/{bin,lib}` 和一个空的 env.sh 建出来,使首装前 source 就不报错
+/// (PATH 先指向空 bin,装完包 refresh_profile 会重写同一文件填入真实路径)。
+///
+/// 幂等:已存在的目录/文件不破坏(env.sh 总是重写为引导版,内容稳定)。
+/// 跨平台:纯建目录 + 写文本(env.sh 是 sh 脚本,Linux/WSL 用;非 unix 也无害地写出)。
+pub fn init_layout(layout: &Layout) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(&layout.root)?;
+    let profile = layout.root.join("profile");
+    let profile_bin = profile.join("bin");
+    let profile_lib = profile.join("lib");
+    std::fs::create_dir_all(&profile_bin)?;
+    std::fs::create_dir_all(&profile_lib)?;
+    std::fs::create_dir_all(layout.locks_dir())?;
+    std::fs::create_dir_all(layout.generations_dir())?;
+
+    // 引导版 env.sh:用绝对路径(canonicalize 失败则退回原路径,目录此刻已存在)。
+    let env_sh = profile.join("env.sh");
+    let bin_abs = std::fs::canonicalize(&profile_bin).unwrap_or(profile_bin);
+    let lib_abs = std::fs::canonicalize(&profile_lib).unwrap_or(profile_lib);
+    std::fs::write(
+        &env_sh,
+        format!(
+            "# Aevum profile 环境(source 此文件)。由 `aevum init` 建,装包后 refresh_profile 重写。\n\
+             export PATH=\"{}:$PATH\"\n\
+             export LD_LIBRARY_PATH=\"{}:${{LD_LIBRARY_PATH:-}}\"\n",
+            bin_abs.display(),
+            lib_abs.display(),
+        ),
+    )?;
+    Ok(())
+}
+
 /// 为 `libfoo.so.X.Y.Z` 建 soname symlink:`libfoo.so.X` → `libfoo.so.X.Y.Z`(在同目录)。
 /// 动态链接器按 soname 查找库,但 store 里只有完整版本名的文件。
 #[cfg(unix)]

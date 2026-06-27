@@ -77,6 +77,15 @@ enum Command {
         #[arg(long)]
         activate: bool,
     },
+    /// 初始化 Aevum root:建目录骨架 + 写引导 env.sh,可选随即拉取索引。
+    Init {
+        /// 初始化后顺带跑一次 `update` 拉 Debian 索引。
+        #[arg(long)]
+        update: bool,
+        /// update 用的镜像(仅 --update 时)。
+        #[arg(long, default_value = "http://mirrors.ustc.edu.cn/debian")]
+        mirror: String,
+    },
     /// 更新 Debian 包索引(重新下载 Packages 文件)。
     Update {
         /// 镜像 URL。
@@ -556,6 +565,38 @@ fn main() -> anyhow::Result<()> {
                         println!("  ⚠ 根包无 bin/ 目录,跳过 activate");
                     }
                 }
+            }
+        }
+        Command::Init { update, mirror } => {
+            aevum_cli::init_layout(&layout).map_err(|e| anyhow::anyhow!("{e}"))?;
+            println!("[init] ✓ 已初始化 {}", layout.root.display());
+            println!("  profile/bin、profile/lib、locks/、generations/ 已建");
+            let env_sh = layout.root.join("profile").join("env.sh");
+            println!("  把这行加进 ~/.bashrc:  source {}", env_sh.display());
+            if update {
+                println!("[init] 顺带拉取 Debian 索引...");
+                // 复用 Update 逻辑:直接递归调用同一处理需要重组,简单起见提示用户或内联。
+                let url = format!("{}/dists/trixie/main/binary-amd64/Packages.gz", mirror);
+                let index_path = layout.index_file();
+                std::fs::create_dir_all(index_path.parent().unwrap())?;
+                let tmp = index_path.parent().unwrap().join(format!("Packages.tmp.{}", std::process::id()));
+                let f = std::fs::File::create(&tmp)?;
+                let mut curl = std::process::Command::new("curl")
+                    .args(["-sL", "--fail", &url]).stdout(std::process::Stdio::piped()).spawn()
+                    .map_err(|e| anyhow::anyhow!("curl spawn 失败: {e}"))?;
+                let out = curl.stdout.take().unwrap();
+                let gz = std::process::Command::new("gunzip").stdin(out).stdout(f).status()
+                    .map_err(|e| anyhow::anyhow!("gunzip 失败: {e}"))?;
+                let cu = curl.wait()?;
+                if cu.success() && gz.success() && std::fs::metadata(&tmp).map(|m| m.len() > 0).unwrap_or(false) {
+                    std::fs::rename(&tmp, &index_path)?;
+                    println!("  ✓ 索引已拉取: {}", index_path.display());
+                } else {
+                    let _ = std::fs::remove_file(&tmp);
+                    println!("  ⚠ 索引拉取失败(可稍后单独跑 `aevum update`),init 其余已完成");
+                }
+            } else {
+                println!("  下一步: aevum update  然后  aevum install <pkg>");
             }
         }
         Command::Update { mirror, arch, dist } => {

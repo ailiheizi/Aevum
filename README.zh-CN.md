@@ -19,8 +19,9 @@
 ## 快速开始
 
 ```bash
-# 1. 初始化(一次性)
-aevum update                    # 下载 Debian 包索引
+# 1. 初始化(一次性):建好 profile + 索引
+export AEVUM_ROOT=~/.aevum
+aevum init --update                # 建目录骨架 + 拉 Debian 索引
 source $AEVUM_ROOT/profile/env.sh  # 加到 .bashrc
 
 # 2. 装包(像 apt 一样简单)
@@ -79,6 +80,7 @@ Aevum 是一个用 Rust 实现的 Linux 用户态包管理器,核心理念:
 
 | 命令 | 功能 |
 |------|------|
+| `aevum init [--update]` | 初始化 root(profile + 目录 + env.sh);`--update` 顺带拉索引 |
 | `aevum ai "<自然语言>"` | **AI 统一入口**:自动判断意图(装包/解释/搜索...),多轮对话 |
 | `aevum install <pkg...>` | 快捷安装(自动求解+下载+建世代+激活+刷新 PATH) |
 | `aevum search <keyword>` | 搜索可安装的包 |
