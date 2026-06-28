@@ -706,7 +706,7 @@ fn main() -> anyhow::Result<()> {
                     let gen_id = aevum_cli::next_generation_id(&layout);
                     // AI 选的包走 verify 门禁(ADR-0005:AI 不能自我放行,须独立复核)。
                     // --yes 同时作为门禁的 confirm:放行版本回退类安全判据(用户已知情拍板)。
-                    do_install(&layout, &action.packages, &[], aevum_cli::MIRROR_USTC, gen_id, true, yes)?;
+                    do_install(&layout, &action.packages, &[], &aevum_cli::configured_mirror(&layout), gen_id, true, yes)?;
                 }
                 "remove" if !action.packages.is_empty() => {
                     println!("→ 意图: 移除 {:?}(用 `aevum remove` 执行)", action.packages);
@@ -920,7 +920,7 @@ fn main() -> anyhow::Result<()> {
             if packages.is_empty() {
                 return Err(anyhow::anyhow!("需提供包名,如 `aevum install hello`"));
             }
-            let mirror = mirror.unwrap_or_else(|| aevum_cli::MIRROR_USTC.to_string());
+            let mirror = mirror.unwrap_or_else(|| aevum_cli::configured_mirror(&layout));
             let gen_id = if generation == 0 {
                 aevum_cli::next_generation_id(&layout)
             } else {

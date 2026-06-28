@@ -795,6 +795,35 @@ pub const DEFAULT_MIRROR: &str = "http://deb.debian.org/debian";
 /// 国内推荐镜像。
 pub const MIRROR_USTC: &str = "http://mirrors.ustc.edu.cn/debian";
 
+/// 从 `$AEVUM_ROOT/config.toml` 的 `[source] mirror` 读用户配置的镜像(P1-24)。
+///
+/// `aevum ai` 此前硬编码 USTC 镜像,中国境外用户得到慢/被阻下载且无从覆盖。
+/// 现在:config.toml 有 `[source] mirror` 则用它;无则回退 `DEFAULT_MIRROR`(CDN,全球可达)。
+pub fn configured_mirror(layout: &Layout) -> String {
+    let config_path = layout.root.join("config.toml");
+    if let Ok(text) = std::fs::read_to_string(&config_path) {
+        // 极简 TOML 提取(不引 toml crate):找 `[source]` 段下的 `mirror = "..."`。
+        let mut in_source = false;
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('[') {
+                in_source = trimmed == "[source]";
+                continue;
+            }
+            if in_source {
+                if let Some(val) = trimmed.strip_prefix("mirror") {
+                    let val = val.trim_start().strip_prefix('=').unwrap_or("").trim();
+                    let val = val.trim_matches('"').trim_matches('\'');
+                    if !val.is_empty() {
+                        return val.to_string();
+                    }
+                }
+            }
+        }
+    }
+    DEFAULT_MIRROR.to_string()
+}
+
 /// 找当前最大世代 id + 1(用于 install 自动分配)。
 pub fn next_generation_id(layout: &Layout) -> u64 {
     let gens_dir = layout.generations_dir();
