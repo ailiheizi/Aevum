@@ -15,7 +15,7 @@ use aevum_closure_builder::{
     Source,
 };
 use aevum_generation::{GenerationManager, PackageRef};
-use aevum_store::{read_meta, FileMeta, IngestedEntry, Store};
+use aevum_store::{FileMeta, IngestedEntry, Store};
 
 /// 派生 Aevum 的各状态目录(基于 `$AEVUM_ROOT`,默认 `./.aevum`)。
 pub struct Layout {
@@ -311,9 +311,19 @@ fn put_file(store: &Store, name: &str, path: &Path) -> Result<PathBuf, Box<dyn s
     // 注意:`store.put` 用 `fs::write` 把 content 实体化入库(永远是实体文件,非 symlink)。
     // 故 meta.is_symlink 必须为 false——否则 put 用 is_symlink=true 算 hash,
     // 而 get 重算时对象是实体文件(is_symlink=false),hash 必失配(verify 完整性会抓到)。
-    // `built.interpreter`/库路径常是解包目录里的 symlink,`fs::read` 已解引用读到目标内容,
-    // 这里只取其权限位,显式把 is_symlink 归 false 以与实际存储形态一致。
-    let mode = read_meta(path).map(|m| m.mode).unwrap_or(0o755);
+    // `built.interpreter`/库路径常是解包目录里的 symlink,`fs::read` 已解引用读到目标内容;
+    // 权限位也必须取**解引用后目标文件**的 mode(P1-19):symlink 自身总是 0o777,
+    // 若按 symlink_metadata 取就丢 setuid(PoC-6 铁律:setuid 必须保留)。
+    // 用 fs::metadata(path)(跟随 symlink)而非 symlink_metadata(不跟随)。
+    #[cfg(unix)]
+    let mode = {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path)
+            .map(|m| m.permissions().mode() & 0o7777)
+            .unwrap_or(0o755)
+    };
+    #[cfg(not(unix))]
+    let mode = 0o755;
     let meta = FileMeta { mode, is_symlink: false };
     Ok(store.put(name, &content, meta)?)
 }
