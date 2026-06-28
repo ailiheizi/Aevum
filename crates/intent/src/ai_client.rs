@@ -147,6 +147,46 @@ pub fn ai_chat(config: &AiConfig, system_prompt: &str, user_message: &str) -> Re
 }
 
 /// OpenAI 兼容 chat completions API。
+/// 把含密钥的 header 写进 0600 的 curl `--config` 文件,避免出现在 argv(P1-17)。
+///
+/// argv 形式 `-H "Authorization: Bearer <key>"` 会让 key 在 curl 运行期间经
+/// `/proc/<pid>/cmdline` / `ps -ef` 对同主机所有进程可读 —— 多用户/容器共享主机上是真实泄露。
+/// curl `--config <file>` 从文件读参数;把含密钥的 header 写进**仅属主可读**临时文件,用后即删(RAII)。
+pub struct AuthConfigFile {
+    pub path: std::path::PathBuf,
+}
+
+impl AuthConfigFile {
+    /// `headers`:要经 --config 传的敏感 header 行(不含 `-H`)。空则返回 None。
+    pub fn new(tag: &str, headers: &[String]) -> Result<Option<Self>, String> {
+        if headers.is_empty() {
+            return Ok(None);
+        }
+        let path = std::env::temp_dir()
+            .join(format!("aevum-curl-auth-{}-{}.cfg", tag, std::process::id()));
+        let mut body = String::new();
+        for h in headers {
+            // curl --config 的 header 项:`header = "..."`,值里的 " 和 \ 需转义。
+            let escaped = h.replace('\\', "\\\\").replace('"', "\\\"");
+            body.push_str(&format!("header = \"{escaped}\"\n"));
+        }
+        std::fs::write(&path, body).map_err(|e| format!("写 curl auth 配置失败: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| format!("设 curl auth 配置权限失败: {e}"))?;
+        }
+        Ok(Some(AuthConfigFile { path }))
+    }
+}
+
+impl Drop for AuthConfigFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path); // 用后即删,不留密钥落盘
+    }
+}
+
 fn call_openai_compat(config: &AiConfig, system_prompt: &str, user_message: &str) -> Result<String, String> {
     let sys_escaped = json_escape(system_prompt);
     let user_escaped = json_escape(user_message);
@@ -163,9 +203,17 @@ fn call_openai_compat(config: &AiConfig, system_prompt: &str, user_message: &str
         .arg("-H")
         .arg("Content-Type: application/json");
 
-    if !config.api_key.is_empty() {
-        cmd.arg("-H")
-            .arg(format!("Authorization: Bearer {}", config.api_key));
+    // P1-17:密钥经 --config 文件(0600)传,不进 argv。
+    let auth = AuthConfigFile::new(
+        "openai",
+        &if config.api_key.is_empty() {
+            vec![]
+        } else {
+            vec![format!("Authorization: Bearer {}", config.api_key)]
+        },
+    )?;
+    if let Some(a) = &auth {
+        cmd.arg("--config").arg(&a.path);
     }
 
     cmd.arg("-d").arg(&body);
@@ -188,17 +236,21 @@ fn call_claude(config: &AiConfig, system_prompt: &str, user_message: &str) -> Re
         config.model, config.max_tokens, sys_escaped, user_escaped
     );
 
-    let output = std::process::Command::new("curl")
-        .arg("-s")
+    // P1-17:x-api-key 经 --config 文件(0600)传,不进 argv。
+    let auth = AuthConfigFile::new("claude", &[format!("x-api-key: {}", config.api_key)])?;
+    let mut cmd = std::process::Command::new("curl");
+    cmd.arg("-s")
         .arg("--max-time")
         .arg("60")
         .arg(&config.endpoint)
         .arg("-H")
         .arg("Content-Type: application/json")
         .arg("-H")
-        .arg(format!("x-api-key: {}", config.api_key))
-        .arg("-H")
-        .arg("anthropic-version: 2023-06-01")
+        .arg("anthropic-version: 2023-06-01");
+    if let Some(a) = &auth {
+        cmd.arg("--config").arg(&a.path);
+    }
+    let output = cmd
         .arg("-d")
         .arg(&body)
         .output()
@@ -325,6 +377,31 @@ mod tests {
     fn extract_claude_response() {
         let resp = r#"{"content":[{"type":"text","text":"hello from claude"}]}"#;
         assert_eq!(extract_claude_content(resp).unwrap(), "hello from claude");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn auth_config_file_is_0600_and_cleaned_up() {
+        use std::os::unix::fs::PermissionsExt;
+        // P1-17:密钥经 --config 文件传,文件须 0600 且 drop 后删除。
+        let path;
+        {
+            let auth = AuthConfigFile::new("test", &[format!("Authorization: Bearer sk-secret")])
+                .unwrap()
+                .expect("非空 headers 应建文件");
+            path = auth.path.clone();
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "auth 配置必须 0600(仅属主可读)");
+            let body = std::fs::read_to_string(&path).unwrap();
+            assert!(body.contains("header = \"Authorization: Bearer sk-secret\""));
+        }
+        // drop 后文件应被删(密钥不落盘残留)。
+        assert!(!path.exists(), "drop 后 auth 配置文件应被删除");
+    }
+
+    #[test]
+    fn auth_config_file_none_for_empty_headers() {
+        assert!(AuthConfigFile::new("test", &[]).unwrap().is_none(), "空 headers 应返回 None(无需文件)");
     }
 
     #[test]
@@ -780,8 +857,17 @@ pub fn ai_chat_history(config: &AiConfig, system_prompt: &str, messages: &[ChatM
     cmd.arg("-s").arg("--max-time").arg("60")
         .arg(&config.endpoint)
         .arg("-H").arg("Content-Type: application/json");
-    if !config.api_key.is_empty() {
-        cmd.arg("-H").arg(format!("Authorization: Bearer {}", config.api_key));
+    // P1-17:密钥经 --config 文件(0600)传,不进 argv。
+    let auth = AuthConfigFile::new(
+        "openai-hist",
+        &if config.api_key.is_empty() {
+            vec![]
+        } else {
+            vec![format!("Authorization: Bearer {}", config.api_key)]
+        },
+    )?;
+    if let Some(a) = &auth {
+        cmd.arg("--config").arg(&a.path);
     }
     cmd.arg("-d").arg(&body);
     let output = cmd.output().map_err(|e| format!("curl 失败: {e}"))?;
@@ -802,12 +888,17 @@ fn call_claude_history(config: &AiConfig, system_prompt: &str, messages: &[ChatM
         r#"{{"model":"{}","max_tokens":{},"system":"{}","messages":[{}]}}"#,
         config.model, config.max_tokens, json_escape(system_prompt), msg_json
     );
-    let output = std::process::Command::new("curl")
-        .arg("-s").arg("--max-time").arg("60")
+    // P1-17:x-api-key 经 --config 文件(0600)传,不进 argv。
+    let auth = AuthConfigFile::new("claude-hist", &[format!("x-api-key: {}", config.api_key)])?;
+    let mut cmd = std::process::Command::new("curl");
+    cmd.arg("-s").arg("--max-time").arg("60")
         .arg(&config.endpoint)
         .arg("-H").arg("Content-Type: application/json")
-        .arg("-H").arg(format!("x-api-key: {}", config.api_key))
-        .arg("-H").arg("anthropic-version: 2023-06-01")
+        .arg("-H").arg("anthropic-version: 2023-06-01");
+    if let Some(a) = &auth {
+        cmd.arg("--config").arg(&a.path);
+    }
+    let output = cmd
         .arg("-d").arg(&body)
         .output().map_err(|e| format!("curl 失败: {e}"))?;
     if !output.status.success() {

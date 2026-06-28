@@ -247,15 +247,20 @@ fn call_deepseek(api_key: &str, model: &str, prompt: &str) -> Result<String, Int
         r#"{{"model":"{model}","messages":[{{"role":"user","content":"{escaped}"}}],"stream":false,"max_tokens":256}}"#
     );
 
-    let output = std::process::Command::new("curl")
-        .arg("-s")
+    // P1-17:Authorization 经 --config 文件(0600)传,不进 argv(防 /proc/pid/cmdline 泄露)。
+    let auth = ai_client::AuthConfigFile::new("deepseek", &[format!("Authorization: Bearer {api_key}")])
+        .map_err(IntentError::ModelUnavailable)?;
+    let mut cmd = std::process::Command::new("curl");
+    cmd.arg("-s")
         .arg("--max-time")
         .arg("60")
         .arg("https://api.deepseek.com/chat/completions")
         .arg("-H")
-        .arg("Content-Type: application/json")
-        .arg("-H")
-        .arg(format!("Authorization: Bearer {api_key}"))
+        .arg("Content-Type: application/json");
+    if let Some(a) = &auth {
+        cmd.arg("--config").arg(&a.path);
+    }
+    let output = cmd
         .arg("-d")
         .arg(&body)
         .output()
