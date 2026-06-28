@@ -4,6 +4,37 @@
 
 ---
 
+## 2026-06-28(日)—— P1 批次3:安全/正确性/可用性收尾
+
+P1 余项全清,路线图 P1 项全部 ✅。
+
+### P1-17 API key 不暴露在 argv(安全)
+
+- curl `-H "Authorization: Bearer <key>"` 进 argv → `/proc/pid/cmdline` 世界可读。
+- 新 `AuthConfigFile` RAII guard:密钥写进 0600 临时 curl `--config` 文件,用后删。5 处 curl 调用统一使用。+2 测试(权限+清理)。
+
+### P1-19 put_file 解引用 symlink 取 mode(PoC-6 正确性)
+
+- soname 链接(如 libc.so.6)经 `symlink_metadata` 读 mode 得到 0o777(symlink 自身),setuid 丢失。
+- 改 `fs::metadata`(跟随 symlink)取目标文件的真实权限位。
+
+### P1-20/21 curl 超时 + 重试(健壮性)
+
+- Nix cache 的 3 处 curl 无 `--max-time`,单包卡死挂整个 BFS。download_deb 无重试。
+- 统一 `CURL_NET_ARGS`:--connect-timeout 30 --max-time 300 --retry 3。download_deb 加 --retry。
+
+### P1-24 镜像从 config.toml 读(可用性)
+
+- `aevum ai` 和 `install` 硬编码 USTC 镜像,中国境外用户无法覆盖。
+- 新 `configured_mirror`:读 config.toml `[source] mirror`,回退 deb.debian.org CDN。
+
+### P1-18 Foundation 封印自动发现(ADR-0003)
+
+- verify 判据3 仅在显式 `--foundation` 时跑;Install/AI 路径无此 flag,封印休眠。
+- 新 `default_foundation_path`:自动发现 `$AEVUM_ROOT/foundation.toml`,存在即启用判据3。
+
+---
+
 ## 2026-06-27(六)補 —— P1 批次2:AI JSON 加固 + PoC 铁律测试缺口补齐
 
 CI 上线后,补齐审计 P1 里"真 bug + 测试缺口"两类,每项独立 commit + CI 验证。
