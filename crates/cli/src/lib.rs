@@ -1134,6 +1134,20 @@ pub fn install(
 /// 硬性失败或需确认未放行时 `outcome.activated=false`,候选世代留盘但 active 不动。
 /// `confirm=true` 仅放行版本回退类安全判据,永不放行完整性/闭合硬失败。unix 专有。
 #[cfg(unix)]
+/// 默认 Foundation manifest 路径:若 `$AEVUM_ROOT/foundation.toml` 存在则返回 Some(P1-18)。
+///
+/// ADR-0003 的 Foundation 封印(判据3:核心组件在场+版本精确)此前仅在显式 `--foundation`
+/// 传递时跑——而 Install/AI 路径根本没这个 flag,封印休眠。现在 verify_generation 自动发现
+/// 默认 manifest:有则启用判据3(阻止候选世代删改核心组件),无则跳过(兼容无 foundation 的场景)。
+pub fn default_foundation_path(layout: &Layout) -> Option<std::path::PathBuf> {
+    let path = layout.root.join("foundation.toml");
+    if path.is_file() {
+        Some(path)
+    } else {
+        None
+    }
+}
+
 pub fn install_gated(
     layout: &Layout,
     lock: &aevum_solver::Lock,
@@ -1148,12 +1162,14 @@ pub fn install_gated(
     // 2. 当前 active 世代的 lock(供门禁做版本回退比较;首装为 None)。
     let active = active_lock_name(layout)?;
     // 3. verify 门禁 → 通过才 set_active(+写 verified 审计标记)。
+    // P1-18:自动发现 $AEVUM_ROOT/foundation.toml(若存在启用判据3/Foundation 封印)。
+    let foundation = default_foundation_path(layout);
     let outcome = activate_verified(
         layout,
         lock_name,
         gen_id,
         active.as_deref(),
-        None, // foundation manifest:AI 便捷装包场景不强制 foundation 判据
+        foundation.as_deref(),
         confirm,
     )?;
     Ok((report, outcome))
