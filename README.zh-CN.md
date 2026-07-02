@@ -97,8 +97,10 @@ Aevum 是一个用 Rust 实现的 Linux 用户态包管理器,核心理念:
 | `aevum export-system <gen>` | 导出可运行 rootfs(chroot/nspawn) |
 | `aevum gc --keep <gen-id,...>` | 垃圾回收(保留指定世代 id 引用的对象) |
 | `aevum explain <message>` | AI 解释错误/给建议 |
+| `aevum verify <lock> --gen <N>` | 对候选世代跑 verify 门禁(完整性/闭合/回退) |
+| `aevum activate <gen> --lock <name>` | 经 verify 门禁激活世代(安全路径) |
 
-> CLI 还有更多进阶命令(`verify`、`activate`、`build`、`compose-generation`、`export-bootroot`、`boot-menu`、`service`、`etc`)。跑 `aevum --help` 看完整列表。
+> CLI 还有更多进阶命令(`build`、`compose-generation`、`export-bootroot`、`boot-menu`、`service`、`etc`)。跑 `aevum --help` 看完整列表。
 
 ---
 

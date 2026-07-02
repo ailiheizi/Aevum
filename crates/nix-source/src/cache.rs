@@ -302,12 +302,13 @@ impl NixCacheClient {
             if store_name.is_empty() {
                 continue;
             }
-            // hash 是前 32 字符(Nix base32),后面是 `-<name>[-<version>]`
-            if store_name.len() < 34 || store_name.as_bytes()[32] != b'-' {
+            // 格式:<32-char hash>-<name>[-<version>]。用 split_once 替代原始字节索引。
+            let Some((hash, pkg_part)) = store_name.split_once('-') else {
+                continue;
+            };
+            if hash.len() != 32 {
                 continue;
             }
-            let hash = &store_name[..32];
-            let pkg_part = &store_name[33..];
 
             // 精确匹配:pkg_part == name 或 pkg_part == name-<version>
             if pkg_part == name

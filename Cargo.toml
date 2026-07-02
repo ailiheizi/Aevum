@@ -27,6 +27,7 @@ edition = "2021"
 license = "Apache-2.0"
 rust-version = "1.88"
 repository = "https://github.com/ailiheizi/Aevum"
+publish = false
 
 # 跨 crate 共享依赖版本,各 crate 用 `.workspace = true` 继承。
 [workspace.dependencies]

@@ -411,14 +411,13 @@ fn main() -> anyhow::Result<()> {
                 // AI 增强路径,人在回路(ADR-0003 边界3):翻译 → 摊开约束 → 确认 → 求解。
                 let lock_name = name.unwrap_or_else(|| "intent".to_string());
                 let intent_obj = aevum_intent::Intent::NaturalLanguage(intent_text.clone());
-                let use_mock = mock || aevum_intent::DeepSeekResolver::from_env().is_none();
+                let resolver_opt = if mock { None } else { aevum_intent::DeepSeekResolver::from_env() };
 
                 // 第一步:仅翻译(不求解、不写 lock)。
                 use aevum_intent::IntentResolver;
-                let outcome = if use_mock {
-                    aevum_intent::MockIntentResolver::with_defaults().resolve_intent(&intent_obj)
-                } else {
-                    aevum_intent::DeepSeekResolver::from_env().unwrap().resolve_intent(&intent_obj)
+                let outcome = match &resolver_opt {
+                    Some(r) => r.resolve_intent(&intent_obj),
+                    None => aevum_intent::MockIntentResolver::with_defaults().resolve_intent(&intent_obj),
                 }
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -1299,11 +1298,10 @@ fn maintain_cmd(
         // AI 只在 lock 之前介入;propose/verify/激活全程无 AI(可复现只来自 lock)。
         use aevum_intent::IntentResolver;
         let intent_obj = aevum_intent::Intent::NaturalLanguage(intent_text.to_string());
-        let use_mock = mock || aevum_intent::DeepSeekResolver::from_env().is_none();
-        let translated = if use_mock {
-            aevum_intent::MockIntentResolver::with_defaults().resolve_intent(&intent_obj)
-        } else {
-            aevum_intent::DeepSeekResolver::from_env().unwrap().resolve_intent(&intent_obj)
+        let resolver_opt = if mock { None } else { aevum_intent::DeepSeekResolver::from_env() };
+        let translated = match &resolver_opt {
+            Some(r) => r.resolve_intent(&intent_obj),
+            None => aevum_intent::MockIntentResolver::with_defaults().resolve_intent(&intent_obj),
         }
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
