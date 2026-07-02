@@ -697,8 +697,10 @@ pub fn resolve_constraints_opt(
     templates: Option<&str>,
 ) -> Result<aevum_solver::Lock, Box<dyn std::error::Error>> {
     let index_path = layout.index_file();
+    // P1-25:索引陈旧警告。超 7 天未更新 → 提示 aevum update(不阻断)。
+    warn_stale_index(&index_path);
     let text = std::fs::read_to_string(&index_path).map_err(|e| {
-        format!("读索引失败 {}: {e}(先 `bash scripts/prep-index.sh`)", index_path.display())
+        format!("读索引失败 {}: {e}(先 `aevum init --update` 或 `aevum update`)", index_path.display())
     })?;
     let index = aevum_solver::Index::from_packages_str(&text);
 
@@ -809,6 +811,25 @@ pub const MIRROR_USTC: &str = "http://mirrors.ustc.edu.cn/debian";
 ///
 /// `aevum ai` 此前硬编码 USTC 镜像,中国境外用户得到慢/被阻下载且无从覆盖。
 /// 现在:config.toml 有 `[source] mirror` 则用它;无则回退 `DEFAULT_MIRROR`(CDN,全球可达)。
+/// 索引陈旧警告(P1-25):如果 Packages 文件 mtime 超 7 天,打印提示。
+/// 用户对几个月前的冻结索引做 resolve/install 却无警告 → 解出的包版本可能已过时/有 CVE。
+/// 纯提示,不阻断(索引可能已是最新但文件系统 mtime 被扰),用户知情后跑 `aevum update` 即可。
+fn warn_stale_index(index_path: &std::path::Path) {
+    const STALE_DAYS: u64 = 7;
+    if let Ok(meta) = std::fs::metadata(index_path) {
+        if let Ok(modified) = meta.modified() {
+            if let Ok(elapsed) = modified.elapsed() {
+                let days = elapsed.as_secs() / 86400;
+                if days >= STALE_DAYS {
+                    eprintln!(
+                        "  ⚠ 索引已 {days} 天未更新(可能过时)。建议: aevum update"
+                    );
+                }
+            }
+        }
+    }
+}
+
 pub fn configured_mirror(layout: &Layout) -> String {
     let config_path = layout.root.join("config.toml");
     if let Ok(text) = std::fs::read_to_string(&config_path) {
