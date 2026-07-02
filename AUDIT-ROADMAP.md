@@ -9,7 +9,7 @@
 >
 > **进度(2026-06-27)P1 批次2**:P1-13/14/15/16 AI JSON 加固 ✅(2c9cb22)、P1-8 elf 正向测试 ✅(89f5c68)、P1-9 NAR 穿越/边界测试 ✅(c84915a)、P1-10 store symlink 测试 ✅(1ad67d8)、P1-11 跨源阻断断言 ✅(bbfe07a)。全部 CI build-test 绿。剩 fmt/clippy 转阻断、P0-2 签名、P1-12 已在更早修复、零散 P2。
 >
-> **进度(2026-06-28)P1 批次3**：P1-17 key 不走 argv ✅(3f50249)、P1-19 put_file 解 symlink mode ✅(7e76f61)、P1-20/21 curl 超时重试 ✅(3406c75)、P1-24 镜像读 config ✅(93b51a4)、P1-18 Foundation 自动发现 ✅(4321988)。P1 全清。
+> **进度(2026-06-28)P1 批次3**：P1-17 key 不走 argv ✅(3f50249)、P1-19 put_file 解 symlink mode ✅(7e76f61)、P1-20/21 curl 超时重试 ✅(3406c75)、P1-24 镜像读 config ✅(93b51a4)、P1-18 Foundation 自动发现 ✅(4321988)。P1 全清; P1-25 索引陈旧警告 ✅(cb3b0bd)。P2 快速清扫(publish=false/命令表/代码质量/generation 测试)✅(62a3830,e955dcb)。
 
 ---
 
