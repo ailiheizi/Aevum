@@ -445,4 +445,46 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    // ── P2:set_active 错误路径 + private-objects GC 可达性 ──
+
+    #[cfg(unix)]
+    #[test]
+    fn set_active_nonexistent_gen_returns_not_found() {
+        let root = std::env::temp_dir().join(format!("aevum-gen-notfound-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mgr = GenerationManager::open(&root).unwrap();
+        // gen-99 从未建 → NotFound。
+        assert!(matches!(mgr.set_active(99), Err(GenError::NotFound(99))));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn gc_reachability_includes_private_objects() {
+        // private-objects.txt 的条目必须被 compute_garbage 纳入可达集,防误回收。
+        let root = std::env::temp_dir().join(format!("aevum-gc-priv-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mgr = GenerationManager::open(&root).unwrap();
+        // 手工建 gen-1:lock.txt 引用 obj-a;private-objects.txt 引用 obj-priv。
+        let g = root.join("gen-001");
+        std::fs::create_dir_all(g.join("packages")).unwrap();
+        std::fs::write(g.join("lock.txt"), "obj-a").unwrap();
+        std::fs::write(g.join("private-objects.txt"), "obj-priv").unwrap();
+
+        let all = vec![
+            "obj-a".to_string(),
+            "obj-priv".to_string(),
+            "obj-orphan".to_string(),
+        ];
+        let plan = mgr.compute_garbage(&[1], &all).unwrap();
+        // obj-a 和 obj-priv 都应被保留(可达),只有 obj-orphan 是垃圾。
+        assert!(plan.kept.contains(&"obj-a".to_string()), "lock.txt 引用应保留");
+        assert!(
+            plan.kept.contains(&"obj-priv".to_string()),
+            "private-objects.txt 引用必须保留(修复前会被误回收)"
+        );
+        assert!(plan.garbage.contains(&"obj-orphan".to_string()), "孤儿应回收");
+        assert!(!plan.garbage.contains(&"obj-priv".to_string()), "private 对象不应被回收");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
